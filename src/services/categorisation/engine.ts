@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import { anthropic } from '@/lib/claude'
 import { supabase } from '@/lib/supabase'
 import {
@@ -12,84 +11,119 @@ import {
   type TransactionCategory,
 } from '@/types/transaction'
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 /** Minimum confidence for a cached rule to be used without calling Claude */
 const RULE_CONFIDENCE_THRESHOLD = 80
 
+/** Confidence assigned when a user manually confirms a categorisation */
+const CONFIRMED_CONFIDENCE = 99
+
 const MODEL = 'claude-sonnet-4-20250514'
 
-// ─── Zod schema for Claude's structured response ─────────────────────────────
+// ─── Hardcoded rules ──────────────────────────────────────────────────────────
+
+/**
+ * Merchants always categorised the same way regardless of business type.
+ * Checked before the Supabase cache so they never need an AI call.
+ */
+const HARDCODED_RULES: Array<{
+  pattern: RegExp
+  category: TransactionCategory
+  confidence: number
+}> = [
+  { pattern: /\bdvla\b/i, category: 'other', confidence: 95 },
+]
+
+// ─── Zod schema for Claude's structured response ──────────────────────────────
 
 const ClaudeCategorizationSchema = z.object({
   category: z.enum(TRANSACTION_CATEGORIES),
   confidence: z.number().int().min(0).max(100),
   reasoning: z.string(),
+  /** Regex to match similar transactions in future — stored in the rules table */
+  pattern: z.string(),
+  /** Typical lower bound for |amount| in £, or null if variable */
+  amount_min: z.number().nullable(),
+  /** Typical upper bound for |amount| in £, or null if variable */
+  amount_max: z.number().nullable(),
 })
 
 // ─── Supabase helpers ─────────────────────────────────────────────────────────
 
 /**
- * Look up a cached rule for this merchant + business type.
+ * Load all rules for a business type, then test each stored regex pattern
+ * against the full description and verify the amount falls within any stored range.
  *
- * Supabase table required:
- *   category_rules (
- *     id           uuid primary key default gen_random_uuid(),
- *     merchant     text not null,
- *     business_type text not null,
- *     category     text not null,
- *     confidence   integer not null,
- *     created_at   timestamptz default now(),
- *     unique (merchant, business_type)
- *   )
+ * Fetching all rules client-side works well for a sole trader (<200 rules).
+ * For multi-tenant scale, replace with a Supabase RPC using the PostgreSQL
+ * `~*` operator: WHERE $description ~* pattern AND ...
  */
 async function lookupRule(
-  merchant: string,
+  description: string,
   businessType: BusinessType,
+  amount: number,
 ): Promise<CategoryRule | null> {
   const { data, error } = await supabase
     .from('category_rules')
     .select('*')
-    .ilike('merchant', merchant)
     .eq('business_type', businessType)
     .order('confidence', { ascending: false })
-    .limit(1)
-    .maybeSingle()
 
   if (error) {
     console.warn('[categorisation] Supabase lookup failed:', error.message)
     return null
   }
-  if (!data) return null
+  if (!data?.length) return null
 
-  return {
-    id: data.id,
-    merchant: data.merchant,
-    category: data.category as TransactionCategory,
-    confidence: data.confidence,
-    businessType: data.business_type as BusinessType,
-    createdAt: data.created_at,
+  const absAmount = Math.abs(amount)
+
+  for (const row of data) {
+    let re: RegExp
+    try {
+      re = new RegExp(row.pattern, 'i')
+    } catch {
+      console.warn('[categorisation] Skipping invalid stored pattern:', row.pattern)
+      continue
+    }
+
+    if (!re.test(description)) continue
+    if (row.amount_min != null && absAmount < row.amount_min) continue
+    if (row.amount_max != null && absAmount > row.amount_max) continue
+
+    return {
+      id: row.id,
+      pattern: row.pattern,
+      category: row.category as TransactionCategory,
+      confidence: row.confidence,
+      amountMin: row.amount_min ?? undefined,
+      amountMax: row.amount_max ?? undefined,
+      businessType: row.business_type as BusinessType,
+      createdAt: row.created_at,
+    }
   }
+
+  return null
 }
 
-/**
- * Upsert a categorisation result into the rules table so it can be
- * served from cache on future calls for the same merchant.
- */
 async function saveRule(
-  merchant: string,
+  pattern: string,
   businessType: BusinessType,
   category: TransactionCategory,
   confidence: number,
+  amountMin?: number,
+  amountMax?: number,
 ): Promise<void> {
   const { error } = await supabase.from('category_rules').upsert(
     {
-      merchant: merchant.toLowerCase(),
+      pattern,
       business_type: businessType,
       category,
       confidence,
+      amount_min: amountMin ?? null,
+      amount_max: amountMax ?? null,
     },
-    { onConflict: 'merchant,business_type' },
+    { onConflict: 'pattern,business_type' },
   )
 
   if (error) {
@@ -97,17 +131,17 @@ async function saveRule(
   }
 }
 
-// ─── Claude helper ────────────────────────────────────────────────────────────
+// ─── Claude helpers ───────────────────────────────────────────────────────────
 
 const CATEGORY_DESCRIPTIONS: Record<TransactionCategory, string> = {
-  fuel: 'Fuel, oil, AdBlue, or other vehicle running costs',
-  materials: 'Parts, components, or consumables used directly on jobs',
-  tools: 'Tools, equipment, or machinery purchased for the business',
-  insurance: 'Public liability, vehicle, trade, or tool insurance',
-  software: 'Software subscriptions, apps, or digital services',
+  fuel:          'Fuel, oil, AdBlue, or other vehicle running costs',
+  materials:     'Parts, components, or consumables used directly on jobs',
+  tools:         'Tools, equipment, or machinery purchased for the business',
+  insurance:     'Public liability, vehicle, trade, or tool insurance',
+  software:      'Software subscriptions, apps, or digital services',
   subcontractor: 'Payments to other tradespeople or labour contractors',
-  income: 'Money received from customers for work completed',
-  other: 'A legitimate business expense that does not fit the above',
+  income:        'Money received from customers for work completed',
+  other:         'A legitimate business expense that does not fit the above',
 }
 
 function buildSystemPrompt(businessType: BusinessType): string {
@@ -117,60 +151,149 @@ function buildSystemPrompt(businessType: BusinessType): string {
     'categorise bank transactions for their annual Self Assessment tax return.',
     '',
     'HMRC expense categories in use:',
-    ...Object.entries(CATEGORY_DESCRIPTIONS).map(
-      ([k, v]) => `  ${k}: ${v}`,
-    ),
+    ...Object.entries(CATEGORY_DESCRIPTIONS).map(([k, v]) => `  ${k}: ${v}`),
     '',
     'Rules:',
     '- Positive amounts are income; negative amounts are expenses.',
     '- When in doubt, prefer a specific category over "other".',
-    '- Confidence reflects how certain you are given only the merchant name and amount.',
-    '- Provide brief reasoning (1–2 sentences) to help the user understand the decision.',
+    '- Confidence reflects how certain you are given the full transaction description.',
+    '- If receipt text is provided, use it to improve accuracy.',
+    '',
+    'Respond with a JSON object only — no markdown, no explanation — in this exact shape:',
+    '{',
+    '  "category": "<category>",',
+    '  "confidence": <0-100>,',
+    '  "reasoning": "<1-2 sentences>",',
+    '  "pattern": "<case-insensitive regex matching similar future descriptions>",',
+    '  "amount_min": <typical lower bound for |amount| in £, or null>,',
+    '  "amount_max": <typical upper bound for |amount| in £, or null>',
+    '}',
+    '',
+    'For "pattern": write a concise, specific regex. Examples:',
+    '  "SHELL.*DIESEL" for diesel at Shell stations',
+    '  "\\\\bHALFORDS\\\\b" for any Halfords transaction',
+    '  "DIRECT\\\\s+LINE.*INSURANCE" for Direct Line insurance',
+    'Avoid overly broad patterns that would match unrelated merchants.',
+    '',
+    'For amount ranges: give the typical absolute-value £ range for this merchant/type.',
+    'Use null for both if amounts vary widely.',
   ].join('\n')
 }
 
-function buildUserMessage(transaction: Transaction): string {
+function buildUserMessage(transaction: Transaction, receiptText?: string): string {
   const sign = transaction.amount >= 0 ? '+' : ''
-  return [
-    'Categorise this transaction:',
-    `  Merchant : ${transaction.merchant}`,
-    `  Amount   : ${sign}£${Math.abs(transaction.amount).toFixed(2)}`,
-    `  Date     : ${transaction.date}`,
-  ].join('\n')
+  const lines = [
+    'Categorise this bank transaction:',
+    `  Description : ${transaction.description}`,
+    `  Amount      : ${sign}£${Math.abs(transaction.amount).toFixed(2)}`,
+    `  Date        : ${transaction.date}`,
+  ]
+  if (transaction.merchant) {
+    lines.push(`  Merchant    : ${transaction.merchant}`)
+  }
+  if (receiptText?.trim()) {
+    lines.push('', '--- Matched receipt (OCR output) ---', receiptText.trim())
+  }
+  return lines.join('\n')
+}
+
+/** Return true if the string compiles as a valid regex. */
+function isValidPattern(pattern: string): boolean {
+  try {
+    new RegExp(pattern, 'i')
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Escape a plain string so it is safe to embed in a regex. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 async function categoriseWithClaude(
   transaction: Transaction,
   context: ClientContext,
-): Promise<{ category: TransactionCategory; confidence: number }> {
-  const response = await anthropic.messages.parse({
+): Promise<{
+  category: TransactionCategory
+  confidence: number
+  pattern: string
+  amountMin?: number
+  amountMax?: number
+}> {
+  const response = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 512,
     system: buildSystemPrompt(context.businessType),
-    messages: [{ role: 'user', content: buildUserMessage(transaction) }],
-    output_config: {
-      format: zodOutputFormat(ClaudeCategorizationSchema),
-    },
+    messages: [{ role: 'user', content: buildUserMessage(transaction, context.receiptText) }],
   })
 
-  const parsed = response.parsed_output
-  if (!parsed) {
+  const text = response.content.find((b) => b.type === 'text')?.text ?? ''
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new Error(`[categorisation] Claude returned non-JSON output: ${text}`)
+  }
+
+  const result = ClaudeCategorizationSchema.safeParse(parsed)
+  if (!result.success) {
     throw new Error(
-      `[categorisation] Claude returned unparseable output (stop_reason: ${response.stop_reason})`,
+      `[categorisation] Claude JSON failed schema validation: ${result.error.message}`,
     )
   }
 
-  return { category: parsed.category, confidence: parsed.confidence }
+  const { category, confidence, amount_min, amount_max } = result.data
+  let { pattern } = result.data
+
+  // Guard: fall back to a safe literal if Claude produced an invalid regex
+  if (!isValidPattern(pattern)) {
+    const seed = transaction.merchant ?? transaction.description.split(/\s+/)[0]
+    pattern = escapeRegex(seed.toUpperCase())
+    console.warn('[categorisation] Claude pattern was invalid; fell back to:', pattern)
+  }
+
+  return {
+    category,
+    confidence,
+    pattern,
+    amountMin: amount_min ?? undefined,
+    amountMax: amount_max ?? undefined,
+  }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
+ * Persist a user-confirmed categorisation at 99% confidence.
+ *
+ * Pass the `matchedPattern` from the original `CategorizationResult` so we
+ * update the exact rule that fired. If no pattern is available, generate one
+ * from the merchant name.
+ *
+ * @param pattern      Regex string from CategorizationResult.matchedPattern, or
+ *                     escapeRegex(merchant.toUpperCase()) as a fallback.
+ * @param businessType Client's trade type.
+ * @param category     The category the user confirmed.
+ */
+export async function confirmRule(
+  pattern: string,
+  businessType: BusinessType,
+  category: TransactionCategory,
+): Promise<void> {
+  await saveRule(pattern, businessType, category, CONFIRMED_CONFIDENCE)
+}
+
+/**
  * Categorise a single bank transaction.
  *
- * 1. Checks the Supabase `category_rules` table for a cached result.
- * 2. Falls back to Claude (claude-opus-4-6) if no confident rule exists.
- * 3. Saves the AI result back to the rules table for future requests.
+ * 1. Checks hardcoded rules (e.g. DVLA → other).
+ * 2. Tests all Supabase rules: each stored regex pattern against the full
+ *    description, with optional amount-range filtering.
+ * 3. Falls back to Claude with the full description + any receipt OCR text.
+ * 4. Saves Claude's suggested pattern back to the rules table for future use.
  *
  * @throws if the Claude API call fails
  */
@@ -178,24 +301,37 @@ export async function categoriseTransaction(
   transaction: Transaction,
   context: ClientContext,
 ): Promise<CategorizationResult> {
-  // 1. Rules cache
-  const cached = await lookupRule(transaction.merchant, context.businessType)
+  // 1. Hardcoded rules
+  for (const rule of HARDCODED_RULES) {
+    if (rule.pattern.test(transaction.description)) {
+      return {
+        category: rule.category,
+        confidence: rule.confidence,
+        source: 'rules',
+        matchedPattern: rule.pattern.source,
+      }
+    }
+  }
+
+  // 2. Supabase rules cache
+  const cached = await lookupRule(transaction.description, context.businessType, transaction.amount)
   if (cached && cached.confidence >= RULE_CONFIDENCE_THRESHOLD) {
     return {
       category: cached.category,
       confidence: cached.confidence,
       source: 'rules',
+      matchedPattern: cached.pattern,
     }
   }
 
-  // 2. AI fallback
-  const { category, confidence } = await categoriseWithClaude(
+  // 3. AI fallback
+  const { category, confidence, pattern, amountMin, amountMax } = await categoriseWithClaude(
     transaction,
     context,
   )
 
-  // 3. Persist for next time
-  await saveRule(transaction.merchant, context.businessType, category, confidence)
+  // 4. Persist pattern for next time
+  await saveRule(pattern, context.businessType, category, confidence, amountMin, amountMax)
 
-  return { category, confidence, source: 'ai' }
+  return { category, confidence, source: 'ai', matchedPattern: pattern }
 }
