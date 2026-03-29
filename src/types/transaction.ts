@@ -93,4 +93,9 @@ export interface CategorizationResult {
    * approves the transaction to persist it at 99% confidence.
    */
   matchedPattern?: string
+  /**
+   * Claude's 1–2 sentence explanation. Only present when source === 'ai'.
+   * Rules cache hits do not re-run Claude so no reasoning is available.
+   */
+  reasoning?: string
 }

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { anthropic } from '@/lib/claude'
-import { supabase } from '@/lib/supabase'
+import { supabaseServer as supabase } from '@/lib/supabase/server'
 import {
   TRANSACTION_CATEGORIES,
   type BusinessType,
@@ -218,6 +218,7 @@ async function categoriseWithClaude(
 ): Promise<{
   category: TransactionCategory
   confidence: number
+  reasoning: string
   pattern: string
   amountMin?: number
   amountMax?: number
@@ -245,7 +246,7 @@ async function categoriseWithClaude(
     )
   }
 
-  const { category, confidence, amount_min, amount_max } = result.data
+  const { category, confidence, reasoning, amount_min, amount_max } = result.data
   let { pattern } = result.data
 
   // Guard: fall back to a safe literal if Claude produced an invalid regex
@@ -258,6 +259,7 @@ async function categoriseWithClaude(
   return {
     category,
     confidence,
+    reasoning,
     pattern,
     amountMin: amount_min ?? undefined,
     amountMax: amount_max ?? undefined,
@@ -325,7 +327,7 @@ export async function categoriseTransaction(
   }
 
   // 3. AI fallback
-  const { category, confidence, pattern, amountMin, amountMax } = await categoriseWithClaude(
+  const { category, confidence, reasoning, pattern, amountMin, amountMax } = await categoriseWithClaude(
     transaction,
     context,
   )
@@ -333,5 +335,5 @@ export async function categoriseTransaction(
   // 4. Persist pattern for next time
   await saveRule(pattern, context.businessType, category, confidence, amountMin, amountMax)
 
-  return { category, confidence, source: 'ai', matchedPattern: pattern }
+  return { category, confidence, reasoning, source: 'ai', matchedPattern: pattern }
 }

@@ -2,7 +2,8 @@
 
 import { useState, useRef } from 'react'
 import { type TransactionCategory } from '@/types/transaction'
-import { confirmTransaction } from './actions'
+import { parseMonzoCSV } from '@/services/bankFeed'
+import { confirmTransaction, processTransactions } from './actions'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,103 +31,6 @@ interface DashboardTransaction {
 
 /** Merchant memory: merchant (lowercase) → { category, pattern } */
 type MerchantMemory = Map<string, { category: TransactionCategory; pattern: string }>
-
-// ─── Mock data ────────────────────────────────────────────────────────────────
-
-const DEMO_TRANSACTIONS: DashboardTransaction[] = [
-  {
-    id: '1', date: '2026-03-01',
-    description: 'HALFORDS AUTO CENTRES STRATFORD 87.49 01MAR',
-    merchant: 'Halfords', amount: -87.49,
-    category: 'materials', confidence: 95, source: 'ai',
-    matchedPattern: '\\bHALFORDS\\b',
-    reasoning: 'The full description confirms Halfords Auto Centres — a UK automotive parts retailer. Amount and description are consistent with consumables or parts for mechanic work.',
-    matchSource: 'receipt', status: 'approved',
-  },
-  {
-    id: '2', date: '2026-03-03',
-    description: 'SHELL 8327 ROMFORD DIESEL 094.20 03MAR',
-    merchant: 'Shell', amount: -94.20,
-    category: 'fuel', confidence: 99, source: 'rules',
-    matchedPattern: 'SHELL.*DIESEL',
-    reasoning: '"SHELL … DIESEL" in the description unambiguously identifies a diesel fuel purchase at a Shell station. Matched by stored rule SHELL.*DIESEL.',
-    matchSource: 'receipt', status: 'approved',
-  },
-  {
-    id: '3', date: '2026-03-04',
-    description: 'DIRECT LINE INSURANCE ANNUAL PREM DD 1240.00',
-    merchant: 'Direct Line', amount: -1240.00,
-    category: 'insurance', confidence: 96, source: 'rules',
-    matchedPattern: 'DIRECT\\s+LINE.*INSURANCE',
-    reasoning: '"DIRECT LINE INSURANCE ANNUAL PREM DD" clearly indicates an insurance direct debit. Matched by rule DIRECT\\s+LINE.*INSURANCE.',
-    matchSource: 'unmatched', status: 'approved',
-  },
-  {
-    id: '4', date: '2026-03-05',
-    description: 'SNAP-ON TOOLS LTD KEIGHLEY 319.99 05MAR',
-    merchant: 'Snap-on Tools', amount: -319.99,
-    category: 'tools', confidence: 97, source: 'ai',
-    matchedPattern: 'SNAP-ON TOOLS',
-    reasoning: '"SNAP-ON TOOLS LTD" in the description confirms a professional tools purchase. Snap-on is exclusively used in the motor trade.',
-    matchSource: 'receipt', status: 'approved',
-  },
-  {
-    id: '5', date: '2026-03-07',
-    description: 'EURO CAR PARTS LTD ROMFORD 152.30 07MAR',
-    merchant: 'Euro Car Parts', amount: -152.30,
-    category: 'materials', confidence: 94, source: 'rules',
-    matchedPattern: 'EURO CAR PARTS',
-    reasoning: '"EURO CAR PARTS LTD" is a UK automotive parts wholesaler. Parts are consumables used directly on customer jobs.',
-    matchSource: 'unmatched', status: 'approved',
-  },
-  {
-    id: '6', date: '2026-03-10',
-    description: 'DVLA VEHICLE TAX VRN AB12CDE 299.00 10MAR',
-    merchant: 'DVLA Vehicle Tax', amount: -299.00,
-    category: 'other', confidence: 95, source: 'hardcoded',
-    matchedPattern: '\\bdvla\\b',
-    reasoning: 'DVLA vehicle road tax is classified as "other" by a built-in rule. The VRN confirms this is a vehicle tax payment — a necessary business cost that does not fit standard HMRC trade categories.',
-    matchSource: 'unmatched', status: 'approved',
-  },
-  {
-    id: '7', date: '2026-03-12',
-    description: 'BP CONNECT CHADWELL HEATH 78.60 12MAR',
-    merchant: 'BP', amount: -78.60,
-    category: 'fuel', confidence: 99, source: 'rules',
-    matchedPattern: '\\bBP\\b.*CONNECT',
-    reasoning: '"BP CONNECT" is a BP fuel station format. Amount and description are consistent with a standard fuel fill-up.',
-    matchSource: 'receipt', status: 'approved',
-  },
-  {
-    id: '8', date: '2026-03-14',
-    description: 'GARAGESOFT PRO MONTHLY SUBSCRIPTION 29.99 14MAR',
-    merchant: 'GarageSoft Pro', amount: -29.99,
-    category: 'software', confidence: 65, source: 'ai',
-    matchedPattern: 'GARAGESOFT',
-    reasoning: '"GARAGESOFT PRO MONTHLY SUBSCRIPTION" indicates a SaaS product for garage management. No prior rule and no receipt found to confirm.',
-    matchSource: 'unmatched', status: 'flagged',
-    reviewReason: 'No receipt found',
-  },
-  {
-    id: '9', date: '2026-03-18',
-    description: 'AUTOSPARKS ELECTRICAL LTD INVOICE 3847 450.00',
-    merchant: 'AutoSparks Electrical', amount: -450.00,
-    category: 'subcontractor', confidence: 68, source: 'ai',
-    matchedPattern: 'AUTOSPARKS ELECTRICAL',
-    reasoning: '"AUTOSPARKS ELECTRICAL LTD INVOICE" suggests a subcontracted auto-electrician, but could also be a parts supplier. No prior history — manual confirmation needed.',
-    matchSource: 'platform', status: 'flagged',
-    reviewReason: 'New merchant – no history',
-  },
-  {
-    id: '10', date: '2026-03-20',
-    description: 'BACS DAVIES AUTOS FORD FOCUS SERVICE JOB 320.00',
-    merchant: 'Customer Payment', amount: 320.00,
-    category: 'income', confidence: 99, source: 'ai',
-    matchedPattern: 'BACS.*SERVICE JOB|BACS.*DAVIES AUTOS',
-    reasoning: '"BACS DAVIES AUTOS … SERVICE JOB" is a BACS payment received for a completed service. The full description makes this unambiguously income.',
-    matchSource: 'receipt', status: 'approved',
-  },
-]
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -358,28 +262,25 @@ function Sidebar() {
 
 // ─── Upload Panel ─────────────────────────────────────────────────────────────
 
-interface UploadedFiles {
-  bankStatement: File | null
-  receipts: File[]
-  platformStatement: File | null
-}
-
 function UploadPanel({
   onProcess,
   isProcessing,
+  bankStatement,
+  onBankStatementChange,
 }: {
   onProcess: () => void
   isProcessing: boolean
+  bankStatement: File | null
+  onBankStatementChange: (file: File | null) => void
 }) {
-  const [files, setFiles] = useState<UploadedFiles>({
-    bankStatement: null, receipts: [], platformStatement: null,
-  })
+  const [receipts, setReceipts] = useState<File[]>([])
+  const [platformStatement, setPlatformStatement] = useState<File | null>(null)
 
   const bankRef = useRef<HTMLInputElement>(null)
   const receiptsRef = useRef<HTMLInputElement>(null)
   const platformRef = useRef<HTMLInputElement>(null)
 
-  const hasAnyFile = files.bankStatement || files.receipts.length > 0 || files.platformStatement
+  const hasAnyFile = bankStatement || receipts.length > 0 || platformStatement
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-xs p-5">
@@ -387,31 +288,33 @@ function UploadPanel({
       <div className="grid grid-cols-3 gap-4">
         <UploadZone
           label="Bank Statement" description="CSV export from your bank" accept=".csv"
-          file={files.bankStatement} inputRef={bankRef}
-          onSelect={(f) => setFiles((p) => ({ ...p, bankStatement: f[0] ?? null }))}
-          onClear={() => setFiles((p) => ({ ...p, bankStatement: null }))}
+          file={bankStatement} inputRef={bankRef}
+          onSelect={(f) => onBankStatementChange(f[0] ?? null)}
+          onClear={() => onBankStatementChange(null)}
         />
         <UploadZone
           label="Receipts" description="JPG, PNG or PDF images" accept="image/*,.pdf" multiple
-          file={files.receipts.length > 0 ? ({ name: `${files.receipts.length} file${files.receipts.length !== 1 ? 's' : ''} selected` } as File) : null}
+          file={receipts.length > 0 ? ({ name: `${receipts.length} file${receipts.length !== 1 ? 's' : ''} selected` } as File) : null}
           inputRef={receiptsRef}
-          onSelect={(f) => setFiles((p) => ({ ...p, receipts: [...p.receipts, ...Array.from(f)] }))}
-          onClear={() => setFiles((p) => ({ ...p, receipts: [] }))}
+          onSelect={(f) => setReceipts((p) => [...p, ...Array.from(f)])}
+          onClear={() => setReceipts([])}
         />
         <UploadZone
           label="Platform Statement" description="Uber, Checkatrade CSV" accept=".csv"
-          file={files.platformStatement} inputRef={platformRef}
-          onSelect={(f) => setFiles((p) => ({ ...p, platformStatement: f[0] ?? null }))}
-          onClear={() => setFiles((p) => ({ ...p, platformStatement: null }))}
+          file={platformStatement} inputRef={platformRef}
+          onSelect={(f) => setPlatformStatement(f[0] ?? null)}
+          onClear={() => setPlatformStatement(null)}
         />
       </div>
       <div className="mt-4 flex items-center justify-between">
         <p className="text-xs text-gray-400">
-          {hasAnyFile ? 'Ready to process' : 'Upload at least one file to continue'}
+          {bankStatement
+            ? hasAnyFile ? 'Ready to process' : 'Ready to process bank statement'
+            : 'Upload a bank statement CSV to continue'}
         </p>
         <button
           onClick={onProcess}
-          disabled={isProcessing}
+          disabled={isProcessing || !bankStatement}
           className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
         >
           {isProcessing ? (
@@ -767,13 +670,45 @@ export default function DashboardPage() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [selected, setSelected] = useState<DashboardTransaction | null>(null)
   const [merchantMemory, setMerchantMemory] = useState<MerchantMemory>(new Map())
+  const [bankFile, setBankFile] = useState<File | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [parseWarnings, setParseWarnings] = useState<string[]>([])
 
-  function handleProcess() {
+  async function handleProcess() {
+    if (!bankFile) return
     setIsProcessing(true)
-    setTimeout(() => {
-      setTransactions(applyMemory(DEMO_TRANSACTIONS, merchantMemory))
+    setError(null)
+    setParseWarnings([])
+
+    try {
+      const text = await bankFile.text()
+      const { transactions: parsed, warnings } = parseMonzoCSV(text)
+      if (warnings.length > 0) setParseWarnings(warnings)
+
+      const rows = await processTransactions(parsed, 'mechanic')
+
+      const mapped: DashboardTransaction[] = rows.map((r, i) => ({
+        id: String(i),
+        date: r.date,
+        description: r.description,
+        merchant: r.merchant ?? r.description,
+        amount: r.amount,
+        category: r.category,
+        confidence: r.confidence,
+        source: r.source,
+        reasoning: r.reasoning ?? '',
+        matchSource: 'unmatched',
+        status: r.confidence >= 80 ? 'approved' : 'flagged',
+        reviewReason: r.confidence < 80 ? 'Low confidence — please review' : undefined,
+        matchedPattern: r.matchedPattern,
+      }))
+
+      setTransactions(applyMemory(mapped, merchantMemory))
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
       setIsProcessing(false)
-    }, 1800)
+    }
   }
 
   function handleApprove(id: string) {
@@ -824,7 +759,37 @@ export default function DashboardPage() {
 
         {/* Content */}
         <div className="px-8 py-6 space-y-5 max-w-7xl">
-          <UploadPanel onProcess={handleProcess} isProcessing={isProcessing} />
+          <UploadPanel
+            onProcess={handleProcess}
+            isProcessing={isProcessing}
+            bankStatement={bankFile}
+            onBankStatementChange={setBankFile}
+          />
+
+          {/* Error banner */}
+          {error && (
+            <div className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+              <AlertIcon className="w-4 h-4 text-red-500 flex-none mt-0.5" />
+              <div>
+                <p className="font-semibold">Failed to process</p>
+                <p className="mt-0.5 text-red-600">{error}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Parse warnings */}
+          {parseWarnings.length > 0 && (
+            <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
+              <AlertIcon className="w-4 h-4 text-amber-500 flex-none mt-0.5" />
+              <div>
+                <p className="font-semibold">{parseWarnings.length} row{parseWarnings.length !== 1 ? 's' : ''} skipped during import</p>
+                <ul className="mt-1 space-y-0.5 text-amber-600">
+                  {parseWarnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              </div>
+            </div>
+          )}
+
           <SummaryCards transactions={transactions} />
           <TransactionsTable transactions={transactions} onSelect={setSelected} />
         </div>
