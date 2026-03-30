@@ -52,58 +52,40 @@ const ClaudeCategorizationSchema = z.object({
 // ─── Supabase helpers ─────────────────────────────────────────────────────────
 
 /**
- * Load all rules for a business type, then test each stored regex pattern
- * against the full description and verify the amount falls within any stored range.
+ * Find the highest-confidence rule that matches this description and amount,
+ * delegating the regex test and amount range check to PostgreSQL via RPC.
  *
- * Fetching all rules client-side works well for a sole trader (<200 rules).
- * For multi-tenant scale, replace with a Supabase RPC using the PostgreSQL
- * `~*` operator: WHERE $description ~* pattern AND ...
+ * Uses the ~* operator (case-insensitive regex) server-side so only the single
+ * best match is returned — no full table scan in JavaScript.
  */
 async function lookupRule(
   description: string,
   businessType: BusinessType,
   amount: number,
 ): Promise<CategoryRule | null> {
-  const { data, error } = await supabase
-    .from('category_rules')
-    .select('*')
-    .eq('business_type', businessType)
-    .order('confidence', { ascending: false })
+  const { data, error } = await supabase.rpc('match_category_rule', {
+    p_description:   description,
+    p_business_type: businessType,
+    p_amount:        Math.abs(amount),
+  })
 
   if (error) {
-    console.warn('[categorisation] Supabase lookup failed:', error.message)
+    console.warn('[categorisation] Supabase RPC failed:', error.message)
     return null
   }
   if (!data?.length) return null
 
-  const absAmount = Math.abs(amount)
-
-  for (const row of data) {
-    let re: RegExp
-    try {
-      re = new RegExp(row.pattern, 'i')
-    } catch {
-      console.warn('[categorisation] Skipping invalid stored pattern:', row.pattern)
-      continue
-    }
-
-    if (!re.test(description)) continue
-    if (row.amount_min != null && absAmount < row.amount_min) continue
-    if (row.amount_max != null && absAmount > row.amount_max) continue
-
-    return {
-      id: row.id,
-      pattern: row.pattern,
-      category: row.category as TransactionCategory,
-      confidence: row.confidence,
-      amountMin: row.amount_min ?? undefined,
-      amountMax: row.amount_max ?? undefined,
-      businessType: row.business_type as BusinessType,
-      createdAt: row.created_at,
-    }
+  const row = data[0]
+  return {
+    id:           row.id,
+    pattern:      row.pattern,
+    category:     row.category as TransactionCategory,
+    confidence:   row.confidence,
+    amountMin:    row.amount_min  ?? undefined,
+    amountMax:    row.amount_max  ?? undefined,
+    businessType: row.business_type as BusinessType,
+    createdAt:    row.created_at,
   }
-
-  return null
 }
 
 async function saveRule(
@@ -145,7 +127,10 @@ const CATEGORY_DESCRIPTIONS: Record<TransactionCategory, string> = {
 }
 
 function buildSystemPrompt(businessType: BusinessType): string {
-  const tradeLabel = businessType === 'mechanic' ? 'motor mechanic' : 'plumber'
+  const tradeLabel =
+    businessType === 'mechanic' ? 'motor mechanic' :
+    businessType === 'plumber'  ? 'plumber' :
+    'self-employed taxi driver'
   return [
     `You are an expert UK accountant helping a self-employed ${tradeLabel} (sole trader)`,
     'categorise bank transactions for their annual Self Assessment tax return.',
@@ -251,8 +236,12 @@ async function categoriseWithClaude(
 
   // Guard: fall back to a safe literal if Claude produced an invalid regex
   if (!isValidPattern(pattern)) {
-    const seed = transaction.merchant ?? transaction.description.split(/\s+/)[0]
-    pattern = escapeRegex(seed.toUpperCase())
+    const seed = (
+      transaction.merchant?.trim() ||
+      transaction.description.trim().split(/\s+/)[0] ||
+      'unknown'
+    ).toUpperCase()
+    pattern = escapeRegex(seed)
     console.warn('[categorisation] Claude pattern was invalid; fell back to:', pattern)
   }
 

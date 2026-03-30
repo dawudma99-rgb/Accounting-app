@@ -32,9 +32,14 @@ const DATE_TOLERANCE   = 3    // ±3 calendar days
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Absolute difference between two amounts. */
+/**
+ * Absolute difference between two GBP amounts, rounded to 2 decimal places
+ * before subtracting to avoid IEEE 754 floating point drift near the tolerance
+ * boundary (e.g. 0.1 + 0.2 === 0.30000000000000004 in JavaScript).
+ */
 function amountDiff(a: number, b: number): number {
-  return Math.abs(a - b)
+  const rounded = (n: number) => Math.round(n * 100) / 100
+  return Math.abs(rounded(a) - rounded(b))
 }
 
 /**

@@ -11,7 +11,7 @@ export const TRANSACTION_CATEGORIES = [
 
 export type TransactionCategory = (typeof TRANSACTION_CATEGORIES)[number]
 
-export type BusinessType = 'mechanic' | 'plumber'
+export type BusinessType = 'mechanic' | 'plumber' | 'taxi'
 
 /** A bank transaction as fetched from the feed or parsed from a CSV */
 export interface Transaction {

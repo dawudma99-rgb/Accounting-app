@@ -75,7 +75,7 @@ function parseDate(raw: string): string {
 
 function parseAmount(raw: string): number {
   const n = parseFloat(raw.trim())
-  if (isNaN(n)) throw new Error(`Unrecognised amount: "${raw}"`)
+  if (!isFinite(n)) throw new Error(`Unrecognised amount: "${raw}"`)
   return n
 }
 

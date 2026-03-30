@@ -121,7 +121,7 @@ function parseNumber(raw: string, field: string): number {
   const trimmed = raw.trim()
   if (trimmed === '' || trimmed === '-') return 0
   const n = parseFloat(trimmed)
-  if (isNaN(n)) throw new Error(`"${field}" is not a valid number: "${raw}"`)
+  if (!isFinite(n)) throw new Error(`"${field}" is not a valid number: "${raw}"`)
   return n
 }
 
