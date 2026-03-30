@@ -16,7 +16,7 @@ import { bulkConfirmTransactions, confirmTransaction, loadConfirmedRules, ocrRec
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type MatchSource = 'receipt' | 'platform' | 'unmatched'
+type MatchSource = 'receipt' | 'receipt-uncertain' | 'platform' | 'unmatched'
 
 interface DashboardTransaction {
   id: string
@@ -65,9 +65,10 @@ const CATEGORY_COLORS: Record<TransactionCategory, string> = {
 }
 
 const MATCH_SOURCE_CONFIG: Record<MatchSource, { label: string; className: string }> = {
-  receipt:   { label: 'Matched to receipt',  className: 'bg-emerald-100 text-emerald-700' },
-  platform:  { label: 'Matched to platform', className: 'bg-blue-100 text-blue-700'     },
-  unmatched: { label: 'Unmatched',           className: 'bg-gray-100 text-gray-500'     },
+  receipt:           { label: 'Matched to receipt',          className: 'bg-emerald-100 text-emerald-700' },
+  'receipt-uncertain': { label: 'Matched to receipt (uncertain)', className: 'bg-yellow-100 text-yellow-700' },
+  platform:          { label: 'Matched to platform',         className: 'bg-blue-100 text-blue-700'     },
+  unmatched:         { label: 'Unmatched',                   className: 'bg-gray-100 text-gray-500'     },
 }
 
 const SOURCE_CONFIG: Record<DashboardTransaction['source'], { label: string; className: string }> = {
@@ -889,7 +890,7 @@ export default function DashboardPage() {
       }
 
       // 4. Receipt OCR + matching (if receipts uploaded)
-      const receiptMap = new Map<number, { matchedReceipt: ExtractedReceipt }>()
+      const receiptMap = new Map<number, { matchedReceipt: ExtractedReceipt; matchSource: 'receipt' | 'receipt-uncertain' }>()
       let newUnmatchedReceipts: UnmatchedReceipt[] = []
 
       if (receiptFiles.length > 0) {
@@ -954,8 +955,8 @@ export default function DashboardPage() {
             matchReceiptTransactions(allExtracted, parsed)
           newUnmatchedReceipts = unmatched
           receiptAnnotated.forEach((a, i) => {
-            if (a.matchSource === 'receipt' && a.matchedReceipt) {
-              receiptMap.set(i, { matchedReceipt: a.matchedReceipt })
+            if ((a.matchSource === 'receipt' || a.matchSource === 'receipt-uncertain') && a.matchedReceipt) {
+              receiptMap.set(i, { matchedReceipt: a.matchedReceipt, matchSource: a.matchSource })
             }
           })
         }
@@ -966,10 +967,10 @@ export default function DashboardPage() {
         const platformMatch = matchMap.get(i)
         const receiptMatch  = receiptMap.get(i)
         // Receipt match takes precedence for expenses; platform match for income
-        const matchSource = platformMatch?.matchSource === 'platform'
+        const matchSource: MatchSource = platformMatch?.matchSource === 'platform'
           ? 'platform'
           : receiptMatch
-          ? 'receipt'
+          ? receiptMatch.matchSource
           : 'unmatched'
         return {
           id: String(i),
