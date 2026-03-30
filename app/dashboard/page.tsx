@@ -3,6 +3,12 @@
 import { useState, useRef } from 'react'
 import { type TransactionCategory } from '@/types/transaction'
 import { parseMonzoCSV } from '@/services/bankFeed'
+import { parseUberCSV } from '@/services/platformFeed/uber'
+import type { UberWeeklyRow } from '@/services/platformFeed/uber'
+import { matchPlatformPayouts } from '@/services/matching/platform'
+import type { UnmatchedPayout } from '@/services/matching/platform'
+import { serialiseToCsv } from '@/lib/export/csv'
+import type { ExportRow } from '@/lib/export/csv'
 import { confirmTransaction, processTransactions } from './actions'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -27,6 +33,8 @@ interface DashboardTransaction {
   status: 'approved' | 'flagged' | 'pending'
   /** Regex pattern from the engine — passed back to confirmRule on approve */
   matchedPattern?: string
+  /** The platform payout row this transaction was matched to. */
+  matchedRow?: UberWeeklyRow
 }
 
 /** Merchant memory: merchant (lowercase) → { category, pattern } */
@@ -267,14 +275,17 @@ function UploadPanel({
   isProcessing,
   bankStatement,
   onBankStatementChange,
+  platformStatement,
+  onPlatformStatementChange,
 }: {
   onProcess: () => void
   isProcessing: boolean
   bankStatement: File | null
   onBankStatementChange: (file: File | null) => void
+  platformStatement: File | null
+  onPlatformStatementChange: (file: File | null) => void
 }) {
   const [receipts, setReceipts] = useState<File[]>([])
-  const [platformStatement, setPlatformStatement] = useState<File | null>(null)
 
   const bankRef = useRef<HTMLInputElement>(null)
   const receiptsRef = useRef<HTMLInputElement>(null)
@@ -302,8 +313,8 @@ function UploadPanel({
         <UploadZone
           label="Platform Statement" description="Uber, Checkatrade CSV" accept=".csv"
           file={platformStatement} inputRef={platformRef}
-          onSelect={(f) => setPlatformStatement(f[0] ?? null)}
-          onClear={() => setPlatformStatement(null)}
+          onSelect={(f) => onPlatformStatementChange(f[0] ?? null)}
+          onClear={() => onPlatformStatementChange(null)}
         />
       </div>
       <div className="mt-4 flex items-center justify-between">
@@ -671,44 +682,102 @@ export default function DashboardPage() {
   const [selected, setSelected] = useState<DashboardTransaction | null>(null)
   const [merchantMemory, setMerchantMemory] = useState<MerchantMemory>(new Map())
   const [bankFile, setBankFile] = useState<File | null>(null)
+  const [platformFile, setPlatformFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [parseWarnings, setParseWarnings] = useState<string[]>([])
+  const [unmatchedPayouts, setUnmatchedPayouts] = useState<UnmatchedPayout[]>([])
 
   async function handleProcess() {
     if (!bankFile) return
     setIsProcessing(true)
     setError(null)
     setParseWarnings([])
+    setUnmatchedPayouts([])
 
     try {
-      const text = await bankFile.text()
-      const { transactions: parsed, warnings } = parseMonzoCSV(text)
+      // 1. Parse bank CSV
+      const bankText = await bankFile.text()
+      const { transactions: parsed, warnings } = parseMonzoCSV(bankText)
       if (warnings.length > 0) setParseWarnings(warnings)
 
+      // 2. Categorise
       const rows = await processTransactions(parsed, 'mechanic')
 
-      const mapped: DashboardTransaction[] = rows.map((r, i) => ({
-        id: String(i),
-        date: r.date,
-        description: r.description,
-        merchant: r.merchant ?? r.description,
-        amount: r.amount,
-        category: r.category,
-        confidence: r.confidence,
-        source: r.source,
-        reasoning: r.reasoning ?? '',
-        matchSource: 'unmatched',
-        status: r.confidence >= 80 ? 'approved' : 'flagged',
-        reviewReason: r.confidence < 80 ? 'Low confidence — please review' : undefined,
-        matchedPattern: r.matchedPattern,
-      }))
+      // 3. Platform matching (if Uber CSV uploaded)
+      type MatchInfo = { matchSource: 'platform' | 'unmatched'; matchedRow?: UberWeeklyRow }
+      const matchMap = new Map<number, MatchInfo>()
+      let newUnmatched: UnmatchedPayout[] = []
+
+      if (platformFile) {
+        const uberText = await platformFile.text()
+        const { rows: uberRows, warnings: uberWarnings } = parseUberCSV(uberText)
+        if (uberWarnings.length > 0) setParseWarnings((w) => [...w, ...uberWarnings])
+        const { transactions: annotated, unmatchedPayouts: unmatched } =
+          matchPlatformPayouts(uberRows, parsed)
+        newUnmatched = unmatched
+        annotated.forEach((a, i) =>
+          matchMap.set(i, { matchSource: a.matchSource, matchedRow: a.matchedRow }),
+        )
+      }
+
+      // 4. Merge categorisation + match results
+      const mapped: DashboardTransaction[] = rows.map((r, i) => {
+        const match = matchMap.get(i)
+        return {
+          id: String(i),
+          date: r.date,
+          description: r.description,
+          merchant: r.merchant ?? r.description,
+          amount: r.amount,
+          category: r.category,
+          confidence: r.confidence,
+          source: r.source,
+          reasoning: r.reasoning ?? '',
+          matchSource: match?.matchSource ?? 'unmatched',
+          matchedRow: match?.matchedRow,
+          status: r.confidence >= 80 ? 'approved' : 'flagged',
+          reviewReason: r.confidence < 80 ? 'Low confidence — please review' : undefined,
+          matchedPattern: r.matchedPattern,
+        }
+      })
 
       setTransactions(applyMemory(mapped, merchantMemory))
+      setUnmatchedPayouts(newUnmatched)
     } catch (err) {
       setError((err as Error).message)
     } finally {
       setIsProcessing(false)
     }
+  }
+
+  function handleDownload() {
+    const exportRows: ExportRow[] = [
+      ...transactions.map((t) => ({
+        date:        t.date,
+        description: t.merchant || t.description,
+        amount:      t.amount,
+        category:    t.category,
+        matchedTo:   t.matchedRow?.sourceLabel ?? 'Unmatched',
+        confidence:  t.confidence,
+      })),
+      ...unmatchedPayouts.map((u) => ({
+        date:        u.row.payoutDate,
+        description: u.row.sourceLabel,
+        amount:      u.row.netEarnings,
+        category:    'income' as const,
+        matchedTo:   `WARNING: ${u.reason}`,
+        confidence:  0,
+      })),
+    ]
+
+    const csv  = serialiseToCsv(exportRows)
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = 'transactions.csv'
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   function handleApprove(id: string) {
@@ -749,6 +818,15 @@ export default function DashboardPage() {
                 {merchantMemory.size} merchant{merchantMemory.size !== 1 ? 's' : ''} remembered
               </span>
             )}
+            {transactions.length > 0 && (
+              <button
+                onClick={handleDownload}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
+              >
+                <UploadIcon className="w-3.5 h-3.5 rotate-180" />
+                Download CSV
+              </button>
+            )}
             <span className="text-xs text-gray-400">29 Mar 2026</span>
             <div className="w-px h-4 bg-gray-200" />
             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-600">
@@ -764,6 +842,8 @@ export default function DashboardPage() {
             isProcessing={isProcessing}
             bankStatement={bankFile}
             onBankStatementChange={setBankFile}
+            platformStatement={platformFile}
+            onPlatformStatementChange={setPlatformFile}
           />
 
           {/* Error banner */}
@@ -773,6 +853,23 @@ export default function DashboardPage() {
               <div>
                 <p className="font-semibold">Failed to process</p>
                 <p className="mt-0.5 text-red-600">{error}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Unmatched platform payouts */}
+          {unmatchedPayouts.length > 0 && (
+            <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
+              <AlertIcon className="w-4 h-4 text-amber-500 flex-none mt-0.5" />
+              <div>
+                <p className="font-semibold">
+                  {unmatchedPayouts.length} Uber payout{unmatchedPayouts.length !== 1 ? 's' : ''} not found in bank statement
+                </p>
+                <ul className="mt-1 space-y-0.5 text-amber-600">
+                  {unmatchedPayouts.map((u, i) => (
+                    <li key={i}>{u.row.sourceLabel} — {u.reason}</li>
+                  ))}
+                </ul>
               </div>
             </div>
           )}
