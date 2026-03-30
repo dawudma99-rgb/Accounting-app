@@ -392,19 +392,19 @@ function Sidebar() {
 function UploadPanel({
   onProcess,
   isProcessing,
-  bankStatement,
-  onBankStatementChange,
-  platformStatement,
-  onPlatformStatementChange,
+  bankStatements,
+  onBankStatementsChange,
+  platformStatements,
+  onPlatformStatementsChange,
   receipts,
   onReceiptsChange,
 }: {
   onProcess: () => void
   isProcessing: boolean
-  bankStatement: File | null
-  onBankStatementChange: (file: File | null) => void
-  platformStatement: File | null
-  onPlatformStatementChange: (file: File | null) => void
+  bankStatements: File[]
+  onBankStatementsChange: (files: File[]) => void
+  platformStatements: File[]
+  onPlatformStatementsChange: (files: File[]) => void
   receipts: File[]
   onReceiptsChange: (files: File[]) => void
 }) {
@@ -413,41 +413,40 @@ function UploadPanel({
   const receiptsRef = useRef<HTMLInputElement>(null)
   const platformRef = useRef<HTMLInputElement>(null)
 
-  const hasAnyFile = bankStatement || receipts.length > 0 || platformStatement
+  const hasAnyFile = bankStatements.length > 0 || receipts.length > 0 || platformStatements.length > 0
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-xs p-5">
       <h2 className="text-sm font-semibold text-gray-900 mb-4">Import Data</h2>
       <div className="grid grid-cols-3 gap-4">
         <UploadZone
-          label="Bank Statement" description="CSV export from your bank" accept=".csv"
-          file={bankStatement} inputRef={bankRef}
-          onSelect={(f) => onBankStatementChange(f[0] ?? null)}
-          onClear={() => onBankStatementChange(null)}
+          label="Bank Statements" description="CSV exports from your bank" accept=".csv"
+          files={bankStatements} inputRef={bankRef}
+          onAdd={(f) => onBankStatementsChange([...bankStatements, ...Array.from(f)])}
+          onRemove={(i) => onBankStatementsChange(bankStatements.filter((_, idx) => idx !== i))}
         />
         <UploadZone
-          label="Receipts" description="JPG, PNG or PDF images" accept="image/*,.pdf" multiple
-          file={receipts.length > 0 ? ({ name: `${receipts.length} file${receipts.length !== 1 ? 's' : ''} selected` } as File) : null}
-          inputRef={receiptsRef}
-          onSelect={(f) => onReceiptsChange([...receipts, ...Array.from(f)])}
-          onClear={() => onReceiptsChange([])}
+          label="Receipts" description="JPG or PNG images" accept="image/jpeg,image/png,image/gif,image/webp"
+          files={receipts} inputRef={receiptsRef}
+          onAdd={(f) => onReceiptsChange([...receipts, ...Array.from(f)])}
+          onRemove={(i) => onReceiptsChange(receipts.filter((_, idx) => idx !== i))}
         />
         <UploadZone
-          label="Platform Statement" description="Uber, Checkatrade CSV" accept=".csv"
-          file={platformStatement} inputRef={platformRef}
-          onSelect={(f) => onPlatformStatementChange(f[0] ?? null)}
-          onClear={() => onPlatformStatementChange(null)}
+          label="Platform Statements" description="Uber, Checkatrade CSV" accept=".csv"
+          files={platformStatements} inputRef={platformRef}
+          onAdd={(f) => onPlatformStatementsChange([...platformStatements, ...Array.from(f)])}
+          onRemove={(i) => onPlatformStatementsChange(platformStatements.filter((_, idx) => idx !== i))}
         />
       </div>
       <div className="mt-4 flex items-center justify-between">
         <p className="text-xs text-gray-400">
-          {bankStatement
-            ? hasAnyFile ? 'Ready to process' : 'Ready to process bank statement'
-            : 'Upload a bank statement CSV to continue'}
+          {bankStatements.length > 0
+            ? 'Ready to process'
+            : 'Upload at least one bank statement CSV to continue'}
         </p>
         <button
           onClick={onProcess}
-          disabled={isProcessing || !bankStatement}
+          disabled={isProcessing || bankStatements.length === 0}
           className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
         >
           {isProcessing ? (
@@ -467,38 +466,51 @@ function UploadPanel({
 }
 
 function UploadZone({
-  label, description, accept, multiple, file, inputRef, onSelect, onClear,
+  label, description, accept, files, inputRef, onAdd, onRemove,
 }: {
-  label: string; description: string; accept: string; multiple?: boolean
-  file: File | null; inputRef: React.RefObject<HTMLInputElement | null>
-  onSelect: (files: FileList) => void; onClear: () => void
+  label: string; description: string; accept: string
+  files: File[]; inputRef: React.RefObject<HTMLInputElement | null>
+  onAdd: (files: FileList) => void; onRemove: (index: number) => void
 }) {
+  function handleClick() {
+    if (inputRef.current) inputRef.current.value = ''
+    inputRef.current?.click()
+  }
+
   return (
-    <div>
-      <input ref={inputRef} type="file" accept={accept} multiple={multiple} className="hidden"
-        onChange={(e) => e.target.files && onSelect(e.target.files)} />
-      {file ? (
-        <div className="h-[90px] flex items-center gap-3 px-4 border-2 border-indigo-300 bg-indigo-50 rounded-lg">
-          <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center flex-none">
-            <CheckIcon className="w-4 h-4 text-indigo-600" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium text-indigo-700 truncate">{file.name}</p>
-            <p className="text-xs text-indigo-400 mt-0.5">{label}</p>
-          </div>
-          <button onClick={onClear} className="flex-none text-indigo-400 hover:text-indigo-600 cursor-pointer">
-            <XIcon className="w-3.5 h-3.5" />
-          </button>
+    <div className="flex flex-col gap-1.5">
+      <input ref={inputRef} type="file" accept={accept} multiple className="hidden"
+        onChange={(e) => e.target.files && onAdd(e.target.files)} />
+
+      {/* Drop zone / add button */}
+      <button
+        onClick={handleClick}
+        className="w-full h-[72px] flex flex-col items-center justify-center gap-1 border-2 border-dashed border-gray-200 hover:border-indigo-400 hover:bg-indigo-50/50 rounded-lg transition-colors cursor-pointer group"
+      >
+        <UploadIcon className="w-4 h-4 text-gray-300 group-hover:text-indigo-400 transition-colors" />
+        <p className="text-xs font-medium text-gray-500 group-hover:text-indigo-600 transition-colors">{label}</p>
+        <p className="text-xs text-gray-400">{description}</p>
+      </button>
+
+      {/* File list */}
+      {files.length > 0 && (
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          {files.map((f, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-2 px-3 py-1.5 bg-white hover:bg-gray-50 border-b border-gray-100 last:border-b-0"
+            >
+              <CheckIcon className="w-3 h-3 text-emerald-500 flex-none" />
+              <p className="flex-1 text-xs text-gray-700 truncate min-w-0">{f.name}</p>
+              <button
+                onClick={() => onRemove(i)}
+                className="flex-none text-gray-300 hover:text-red-400 transition-colors cursor-pointer"
+              >
+                <XIcon className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
         </div>
-      ) : (
-        <button
-          onClick={() => inputRef.current?.click()}
-          className="w-full h-[90px] flex flex-col items-center justify-center gap-1.5 border-2 border-dashed border-gray-200 hover:border-indigo-400 hover:bg-indigo-50/50 rounded-lg transition-colors cursor-pointer group"
-        >
-          <UploadIcon className="w-5 h-5 text-gray-300 group-hover:text-indigo-400 transition-colors" />
-          <p className="text-xs font-medium text-gray-500 group-hover:text-indigo-600 transition-colors">{label}</p>
-          <p className="text-xs text-gray-400">{description}</p>
-        </button>
       )}
     </div>
   )
@@ -824,8 +836,8 @@ export default function DashboardPage() {
     })
   }, [])
 
-  const [bankFile, setBankFile] = useState<File | null>(null)
-  const [platformFile, setPlatformFile] = useState<File | null>(null)
+  const [bankFiles, setBankFiles] = useState<File[]>([])
+  const [platformFiles, setPlatformFiles] = useState<File[]>([])
   const [receiptFiles, setReceiptFiles] = useState<File[]>([])
   const [error, setError] = useState<string | null>(null)
   const [parseWarnings, setParseWarnings] = useState<string[]>([])
@@ -833,7 +845,7 @@ export default function DashboardPage() {
   const [unmatchedReceipts, setUnmatchedReceipts] = useState<UnmatchedReceipt[]>([])
 
   async function handleProcess() {
-    if (!bankFile) return
+    if (bankFiles.length === 0) return
     setIsProcessing(true)
     setError(null)
     setParseWarnings([])
@@ -841,25 +853,35 @@ export default function DashboardPage() {
     setUnmatchedReceipts([])
 
     try {
-      // 1. Parse bank CSV
-      const bankText = await bankFile.text()
-      const { transactions: parsed, warnings } = parseMonzoCSV(bankText)
-      if (warnings.length > 0) setParseWarnings(warnings)
+      // 1. Parse all bank CSVs and concatenate
+      const allWarnings: string[] = []
+      const parsed: import('@/types/transaction').Transaction[] = []
+      for (const file of bankFiles) {
+        const text = await file.text()
+        const { transactions, warnings } = parseMonzoCSV(text)
+        parsed.push(...transactions)
+        allWarnings.push(...warnings)
+      }
+      if (allWarnings.length > 0) setParseWarnings(allWarnings)
 
       // 2. Categorise
       const rows = await processTransactions(parsed, businessType)
 
-      // 3. Platform matching (if Uber CSV uploaded)
+      // 3. Platform matching — parse all platform CSVs and concatenate
       type MatchInfo = { matchSource: 'platform' | 'unmatched'; matchedRow?: UberWeeklyRow }
       const matchMap = new Map<number, MatchInfo>()
       let newUnmatched: UnmatchedPayout[] = []
 
-      if (platformFile) {
-        const uberText = await platformFile.text()
-        const { rows: uberRows, warnings: uberWarnings } = parseUberCSV(uberText)
-        if (uberWarnings.length > 0) setParseWarnings((w) => [...w, ...uberWarnings])
+      if (platformFiles.length > 0) {
+        const allUberRows: UberWeeklyRow[] = []
+        for (const file of platformFiles) {
+          const text = await file.text()
+          const { rows: uberRows, warnings: uberWarnings } = parseUberCSV(text)
+          allUberRows.push(...uberRows)
+          if (uberWarnings.length > 0) setParseWarnings((w) => [...w, ...uberWarnings])
+        }
         const { transactions: annotated, unmatchedPayouts: unmatched } =
-          matchPlatformPayouts(uberRows, parsed)
+          matchPlatformPayouts(allUberRows, parsed)
         newUnmatched = unmatched
         annotated.forEach((a, i) =>
           matchMap.set(i, { matchSource: a.matchSource, matchedRow: a.matchedRow }),
@@ -1127,10 +1149,10 @@ export default function DashboardPage() {
           <UploadPanel
             onProcess={handleProcess}
             isProcessing={isProcessing}
-            bankStatement={bankFile}
-            onBankStatementChange={setBankFile}
-            platformStatement={platformFile}
-            onPlatformStatementChange={setPlatformFile}
+            bankStatements={bankFiles}
+            onBankStatementsChange={setBankFiles}
+            platformStatements={platformFiles}
+            onPlatformStatementsChange={setPlatformFiles}
             receipts={receiptFiles}
             onReceiptsChange={setReceiptFiles}
           />
