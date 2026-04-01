@@ -85,6 +85,37 @@ export interface UberParseResult {
   warnings: string[]
 }
 
+// ─── CSV row parser ───────────────────────────────────────────────────────────
+
+/**
+ * Split one CSV line into fields, correctly handling quoted fields that contain
+ * commas (e.g. "1,234.56") and escaped double-quotes ("").
+ */
+function parseRow(line: string): string[] {
+  const fields: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i++
+      } else {
+        inQuotes = !inQuotes
+      }
+    } else if (ch === ',' && !inQuotes) {
+      fields.push(current.trim())
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  fields.push(current.trim())
+  return fields
+}
+
 // ─── Expected headers ─────────────────────────────────────────────────────────
 
 const EXPECTED_HEADERS = [
@@ -120,7 +151,9 @@ function parseDate(raw: string, field: string): string {
 function parseNumber(raw: string, field: string): number {
   const trimmed = raw.trim()
   if (trimmed === '' || trimmed === '-') return 0
-  const n = parseFloat(trimmed)
+  // Strip currency symbols and thousands-separators before parsing
+  const normalised = trimmed.replace(/[£$€,]/g, '')
+  const n = parseFloat(normalised)
   if (!isFinite(n)) throw new Error(`"${field}" is not a valid number: "${raw}"`)
   return n
 }
@@ -162,7 +195,7 @@ export function parseUberCSV(csv: string): UberParseResult {
   }
 
   // Parse header row and validate
-  const headers = lines[0].split(',').map((h) => h.trim())
+  const headers = parseRow(lines[0])
   const missing = EXPECTED_HEADERS.filter((h) => !headers.includes(h))
   if (missing.length > 0) {
     throw new Error(
@@ -179,7 +212,7 @@ export function parseUberCSV(csv: string): UberParseResult {
   let skipped = 0
 
   for (let i = 1; i < lines.length; i++) {
-    const fields = lines[i].split(',').map((f) => f.trim())
+    const fields = parseRow(lines[i])
     const lineNum = i + 1
 
     // Build raw row for debugging before attempting any parsing
