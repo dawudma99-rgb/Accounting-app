@@ -12,9 +12,22 @@ import type { UnmatchedReceipt } from '@/services/matching/receipt'
 import type { ExtractedReceipt } from '@/services/ocr/receipt'
 import { serialiseToCsv } from '@/lib/export/csv'
 import type { ExportRow } from '@/lib/export/csv'
-import { bulkConfirmTransactions, confirmTransaction, loadConfirmedRules, ocrReceipts, processTransactions } from './actions'
+import {
+  bulkConfirmTransactions,
+  confirmTransaction,
+  createClient,
+  getClientTransactions,
+  getClients,
+  loadConfirmedRules,
+  ocrReceipts,
+  processTransactions,
+  saveRunTransactions,
+} from './actions'
+import type { ClientRecord, SavedTransaction } from './actions'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+type View = 'dashboard' | 'clients' | 'client-detail'
 
 type MatchSource = 'receipt' | 'receipt-uncertain' | 'platform' | 'unmatched'
 
@@ -42,7 +55,7 @@ interface DashboardTransaction {
   matchedReceipt?: ExtractedReceipt
 }
 
-/** Merchant memory: merchant (lowercase) → { category, pattern } */
+/** Merchant memory: pattern (regex) → { category, pattern } */
 type MerchantMemory = Map<string, { category: TransactionCategory; pattern: string }>
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -65,26 +78,24 @@ const CATEGORY_COLORS: Record<TransactionCategory, string> = {
 }
 
 const MATCH_SOURCE_CONFIG: Record<MatchSource, { label: string; className: string }> = {
-  receipt:           { label: 'Matched to receipt',          className: 'bg-emerald-100 text-emerald-700' },
+  receipt:             { label: 'Matched to receipt',           className: 'bg-emerald-100 text-emerald-700' },
   'receipt-uncertain': { label: 'Matched to receipt (uncertain)', className: 'bg-yellow-100 text-yellow-700' },
-  platform:          { label: 'Matched to platform',         className: 'bg-blue-100 text-blue-700'     },
-  unmatched:         { label: 'Unmatched',                   className: 'bg-gray-100 text-gray-500'     },
+  platform:            { label: 'Matched to platform',          className: 'bg-blue-100 text-blue-700'      },
+  unmatched:           { label: 'Unmatched',                    className: 'bg-gray-100 text-gray-500'      },
 }
 
 const SOURCE_CONFIG: Record<DashboardTransaction['source'], { label: string; className: string }> = {
-  ai:         { label: 'AI classified',   className: 'bg-purple-100 text-purple-700' },
-  rules:      { label: 'Cached rule',     className: 'bg-indigo-100 text-indigo-700' },
-  hardcoded:  { label: 'Built-in rule',   className: 'bg-slate-100 text-slate-600'  },
-  memory:     { label: 'Confirmed',       className: 'bg-emerald-100 text-emerald-700' },
+  ai:        { label: 'AI classified', className: 'bg-purple-100 text-purple-700'  },
+  rules:     { label: 'Cached rule',   className: 'bg-indigo-100 text-indigo-700'  },
+  hardcoded: { label: 'Built-in rule', className: 'bg-slate-100 text-slate-600'    },
+  memory:    { label: 'Confirmed',     className: 'bg-emerald-100 text-emerald-700' },
 }
 
-const NAV_ITEMS = [
-  { label: 'Dashboard',    icon: GridIcon,    active: true  },
-  { label: 'Clients',      icon: UsersIcon,   active: false },
-  { label: 'Transactions', icon: ListIcon,    active: false },
-  { label: 'Receipts',     icon: ReceiptIcon, active: false },
-  { label: 'Settings',     icon: SettingsIcon, active: false },
-]
+const BUSINESS_TYPE_LABELS: Record<BusinessType, string> = {
+  taxi:     'Taxi driver',
+  mechanic: 'Mechanic',
+  plumber:  'Plumber',
+}
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -155,6 +166,13 @@ function ChevronRightIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <polyline points="9 18 15 12 9 6" />
+    </svg>
+  )
+}
+function ChevronLeftIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <polyline points="15 18 9 12 15 6" />
     </svg>
   )
 }
@@ -240,16 +258,16 @@ function applyMemory(
 // ─── Bulk Approve Bar ─────────────────────────────────────────────────────────
 
 const CONFIDENCE_OPTIONS = [
-  { label: 'Any confidence', value: 0   },
+  { label: 'Any confidence',  value: 0  },
   { label: '≥70% confidence', value: 70 },
   { label: '≥80% confidence', value: 80 },
   { label: '≥90% confidence', value: 90 },
 ]
 
 const SOURCE_OPTIONS: Array<{ label: string; value: DashboardTransaction['source'] | 'all' }> = [
-  { label: 'All sources',    value: 'all'   },
-  { label: 'AI classified',  value: 'ai'    },
-  { label: 'Cached rule',    value: 'rules' },
+  { label: 'All sources',   value: 'all'   },
+  { label: 'AI classified', value: 'ai'    },
+  { label: 'Cached rule',   value: 'rules' },
 ]
 
 function BulkApproveBar({
@@ -261,11 +279,10 @@ function BulkApproveBar({
   onApprove: (eligible: DashboardTransaction[]) => void
   isSaving: boolean
 }) {
-  const [confidenceMin, setConfidenceMin] = useState(0)
-  const [sourceFilter,  setSourceFilter]  = useState<DashboardTransaction['source'] | 'all'>('all')
+  const [confidenceMin,  setConfidenceMin]  = useState(0)
+  const [sourceFilter,   setSourceFilter]   = useState<DashboardTransaction['source'] | 'all'>('all')
   const [categoryFilter, setCategoryFilter] = useState<TransactionCategory | 'all'>('all')
 
-  // Eligible: not already in the rulebook (rules/memory already in Supabase)
   const eligible = transactions.filter((t) => {
     if (t.source === 'rules' || t.source === 'memory') return false
     if (t.confidence < confidenceMin) return false
@@ -276,10 +293,7 @@ function BulkApproveBar({
 
   const categoryOptions: Array<{ label: string; value: TransactionCategory | 'all' }> = [
     { label: 'All categories', value: 'all' },
-    ...TRANSACTION_CATEGORIES.map((c) => ({
-      label: CATEGORY_LABELS[c],
-      value: c,
-    })),
+    ...TRANSACTION_CATEGORIES.map((c) => ({ label: CATEGORY_LABELS[c], value: c })),
   ]
 
   return (
@@ -339,7 +353,32 @@ function BulkApproveBar({
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-function Sidebar() {
+function Sidebar({
+  currentView,
+  onNavigate,
+}: {
+  currentView: View
+  onNavigate: (view: View) => void
+}) {
+  const navItems: Array<{
+    label: string
+    icon: (p: { className?: string }) => React.ReactElement
+    view: View | null
+  }> = [
+    { label: 'Dashboard',    icon: GridIcon,     view: 'dashboard' },
+    { label: 'Clients',      icon: UsersIcon,    view: 'clients'   },
+    { label: 'Transactions', icon: ListIcon,     view: null        },
+    { label: 'Receipts',     icon: ReceiptIcon,  view: null        },
+    { label: 'Settings',     icon: SettingsIcon, view: null        },
+  ]
+
+  // Clients nav item stays highlighted when viewing a client's detail
+  function isActive(view: View | null): boolean {
+    if (view === null) return false
+    if (view === 'clients') return currentView === 'clients' || currentView === 'client-detail'
+    return currentView === view
+  }
+
   return (
     <aside className="w-60 flex-none bg-slate-900 flex flex-col h-full">
       <div className="px-5 py-5 border-b border-slate-700/60">
@@ -358,13 +397,17 @@ function Sidebar() {
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-0.5">
-        {NAV_ITEMS.map(({ label, icon: Icon, active }) => (
+        {navItems.map(({ label, icon: Icon, view }) => (
           <button
             key={label}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
-              active
-                ? 'bg-indigo-600 text-white'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+            onClick={() => view && onNavigate(view)}
+            disabled={!view}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              isActive(view)
+                ? 'bg-indigo-600 text-white cursor-pointer'
+                : view
+                ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 cursor-pointer'
+                : 'text-slate-600 cursor-not-allowed opacity-40'
             }`}
           >
             <Icon className="w-4.5 h-4.5 flex-none" />
@@ -409,12 +452,9 @@ function UploadPanel({
   receipts: File[]
   onReceiptsChange: (files: File[]) => void
 }) {
-
-  const bankRef = useRef<HTMLInputElement>(null)
+  const bankRef     = useRef<HTMLInputElement>(null)
   const receiptsRef = useRef<HTMLInputElement>(null)
   const platformRef = useRef<HTMLInputElement>(null)
-
-  const hasAnyFile = bankStatements.length > 0 || receipts.length > 0 || platformStatements.length > 0
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-xs p-5">
@@ -483,7 +523,6 @@ function UploadZone({
       <input ref={inputRef} type="file" accept={accept} multiple className="hidden"
         onChange={(e) => e.target.files && onAdd(e.target.files)} />
 
-      {/* Drop zone / add button */}
       <button
         onClick={handleClick}
         className="w-full h-[72px] flex flex-col items-center justify-center gap-1 border-2 border-dashed border-gray-200 hover:border-indigo-400 hover:bg-indigo-50/50 rounded-lg transition-colors cursor-pointer group"
@@ -493,7 +532,6 @@ function UploadZone({
         <p className="text-xs text-gray-400">{description}</p>
       </button>
 
-      {/* File list */}
       {files.length > 0 && (
         <div className="border border-gray-200 rounded-lg overflow-hidden">
           {files.map((f, i) => (
@@ -520,10 +558,10 @@ function UploadZone({
 // ─── Summary Cards ────────────────────────────────────────────────────────────
 
 function SummaryCards({ transactions }: { transactions: DashboardTransaction[] }) {
-  const income    = transactions.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0)
-  const expenses  = transactions.filter((t) => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0)
-  const approved  = transactions.filter((t) => t.status === 'approved').length
-  const flagged   = transactions.filter((t) => t.status === 'flagged').length
+  const income   = transactions.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0)
+  const expenses = transactions.filter((t) => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0)
+  const approved = transactions.filter((t) => t.status === 'approved').length
+  const flagged  = transactions.filter((t) => t.status === 'flagged').length
 
   const cards = [
     { label: 'Total Transactions', value: transactions.length.toString(), sub: 'this period',
@@ -539,7 +577,7 @@ function SummaryCards({ transactions }: { transactions: DashboardTransaction[] }
       color: 'text-emerald-700', dot: 'bg-emerald-500' },
     { label: 'Flagged for Review', value: flagged.toString(), sub: 'need attention',
       color: flagged > 0 ? 'text-amber-600' : 'text-gray-400',
-      dot: flagged > 0 ? 'bg-amber-500' : 'bg-gray-300' },
+      dot:   flagged > 0 ? 'bg-amber-500'  : 'bg-gray-300'  },
   ]
 
   return (
@@ -690,7 +728,6 @@ function DetailModal({
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
-        {/* Header */}
         <div className={`px-6 py-5 ${
           transaction.confidence >= 90 ? 'bg-emerald-50 border-b border-emerald-100'
           : transaction.confidence >= 70 ? 'bg-amber-50 border-b border-amber-100'
@@ -713,9 +750,7 @@ function DetailModal({
           </div>
         </div>
 
-        {/* Body */}
         <div className="px-6 py-5 space-y-4">
-          {/* Review reason banner */}
           {transaction.reviewReason && (
             <div className="flex items-center gap-2.5 px-3.5 py-2.5 bg-amber-50 border border-amber-200 rounded-lg">
               <AlertIcon className="w-4 h-4 text-amber-500 flex-none" />
@@ -726,7 +761,6 @@ function DetailModal({
             </div>
           )}
 
-          {/* Category + classification source */}
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs text-gray-400 mb-1">Category</p>
@@ -742,7 +776,6 @@ function DetailModal({
             </div>
           </div>
 
-          {/* Confidence */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <p className="text-xs text-gray-400">Confidence</p>
@@ -764,7 +797,6 @@ function DetailModal({
             </div>
           </div>
 
-          {/* AI Reasoning */}
           <div>
             <div className="flex items-center gap-1.5 mb-2">
               <BrainIcon className="w-3.5 h-3.5 text-gray-400" />
@@ -775,7 +807,6 @@ function DetailModal({
             </blockquote>
           </div>
 
-          {/* Match source */}
           <div className="flex flex-col gap-1.5 py-3 px-4 bg-gray-50 rounded-lg">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -798,7 +829,6 @@ function DetailModal({
           </div>
         </div>
 
-        {/* Actions */}
         <div className="px-6 pb-6 flex gap-3">
           <button
             onClick={() => { onApprove(transaction.id); onClose() }}
@@ -820,33 +850,618 @@ function DetailModal({
   )
 }
 
+// ─── Create Client Modal ──────────────────────────────────────────────────────
+
+function CreateClientModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void
+  onCreated: (client: ClientRecord) => void
+}) {
+  const [name,         setName]         = useState('')
+  const [businessType, setBusinessType] = useState<BusinessType>('taxi')
+  const [utr,          setUtr]          = useState('')
+  const [saving,       setSaving]       = useState(false)
+  const [error,        setError]        = useState<string | null>(null)
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!name.trim()) return
+    setSaving(true)
+    setError(null)
+    try {
+      const client = await createClient({ name: name.trim(), businessType, utr: utr.trim() || null })
+      onCreated(client)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-gray-900">New Client</h2>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+          >
+            <XIcon className="w-4 h-4" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">
+              Full Name <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. John Davies"
+              required
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-transparent"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">
+              Trade <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={businessType}
+              onChange={(e) => setBusinessType(e.target.value as BusinessType)}
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-900 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            >
+              <option value="taxi">Taxi driver</option>
+              <option value="mechanic">Mechanic</option>
+              <option value="plumber">Plumber</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">
+              UTR <span className="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={utr}
+              onChange={(e) => setUtr(e.target.value)}
+              placeholder="10-digit HMRC reference"
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-300 font-mono"
+            />
+          </div>
+
+          {error && (
+            <p className="text-xs text-red-600 bg-red-50 border border-red-100 px-3 py-2 rounded-lg">{error}</p>
+          )}
+
+          <div className="flex gap-3 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2.5 border border-gray-200 hover:border-gray-300 text-gray-600 text-sm font-medium rounded-lg transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving || !name.trim()}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer"
+            >
+              {saving ? <><SpinnerIcon className="w-4 h-4 animate-spin" /> Creating…</> : 'Create Client'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ─── Clients View ─────────────────────────────────────────────────────────────
+
+function ClientsView({
+  onViewClient,
+  onNewClient,
+}: {
+  onViewClient: (client: ClientRecord) => void
+  onNewClient: (client: ClientRecord) => void
+}) {
+  const [clients,     setClients]     = useState<ClientRecord[]>([])
+  const [loading,     setLoading]     = useState(true)
+  const [showCreate,  setShowCreate]  = useState(false)
+
+  useEffect(() => {
+    getClients()
+      .then(setClients)
+      .finally(() => setLoading(false))
+  }, [])
+
+  return (
+    <>
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-8 py-4 flex items-center justify-between">
+        <div>
+          <h1 className="text-base font-semibold text-gray-900">Clients</h1>
+          <p className="text-xs text-gray-400 mt-0.5">
+            {loading ? 'Loading…' : `${clients.length} client${clients.length !== 1 ? 's' : ''}`}
+          </p>
+        </div>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
+        >
+          + New Client
+        </button>
+      </div>
+
+      <div className="px-8 py-6">
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <SpinnerIcon className="w-6 h-6 animate-spin text-gray-400" />
+          </div>
+        ) : clients.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
+              <UsersIcon className="w-6 h-6 text-gray-400" />
+            </div>
+            <p className="text-sm font-medium text-gray-500">No clients yet</p>
+            <p className="text-xs text-gray-400 mt-1">Create a client to start processing their transactions</p>
+            <button
+              onClick={() => setShowCreate(true)}
+              className="mt-4 flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
+            >
+              + New Client
+            </button>
+          </div>
+        ) : (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50/70">
+                  <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Name</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Trade</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">UTR</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Added</th>
+                  <th className="px-4 py-3" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {clients.map((client) => (
+                  <tr
+                    key={client.id}
+                    onClick={() => onViewClient(client)}
+                    className="cursor-pointer hover:bg-gray-50 transition-colors"
+                  >
+                    <td className="px-6 py-3.5 font-medium text-gray-900">{client.name}</td>
+                    <td className="px-4 py-3.5">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-indigo-50 text-indigo-700">
+                        {BUSINESS_TYPE_LABELS[client.business_type]}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5 text-gray-500 font-mono text-xs">
+                      {client.utr ?? <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="px-4 py-3.5 text-xs text-gray-400">
+                      {new Date(client.created_at).toLocaleDateString('en-GB', {
+                        day: 'numeric', month: 'short', year: 'numeric',
+                      })}
+                    </td>
+                    <td className="px-4 py-3.5 text-gray-300">
+                      <ChevronRightIcon className="w-4 h-4" />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {showCreate && (
+        <CreateClientModal
+          onClose={() => setShowCreate(false)}
+          onCreated={(client) => {
+            setClients((prev) => [client, ...prev])
+            setShowCreate(false)
+            onNewClient(client)
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+// ─── History Detail Modal ─────────────────────────────────────────────────────
+
+function HistoryDetailModal({
+  transaction,
+  onClose,
+}: {
+  transaction: SavedTransaction
+  onClose: () => void
+}) {
+  const amt        = Number(transaction.amount)
+  const confidence = transaction.confidence_score
+  const cat        = transaction.category as TransactionCategory
+  const src        = transaction.source as DashboardTransaction['source'] | null
+  const matchSrc   = transaction.match_source as MatchSource | null
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+        {/* Header */}
+        <div className={`px-6 py-5 ${
+          confidence >= 90 ? 'bg-emerald-50 border-b border-emerald-100'
+          : confidence >= 70 ? 'bg-amber-50 border-b border-amber-100'
+          : 'bg-red-50 border-b border-red-100'
+        }`}>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-medium text-gray-500 mb-0.5">
+                {new Date(transaction.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+              </p>
+              <h3 className="text-lg font-bold text-gray-900">
+                {transaction.merchant ?? transaction.description ?? '—'}
+              </h3>
+              <p className={`text-2xl font-bold mt-1 font-mono tabular-nums ${amt >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                {amt >= 0 ? `+£${amt.toFixed(2)}` : `-£${Math.abs(amt).toFixed(2)}`}
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className="w-8 h-8 flex items-center justify-center rounded-full bg-white/70 hover:bg-white text-gray-500 hover:text-gray-700 transition-colors cursor-pointer"
+            >
+              <XIcon className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5 space-y-4">
+          {/* Review reason banner */}
+          {transaction.review_reason && (
+            <div className="flex items-center gap-2.5 px-3.5 py-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+              <AlertIcon className="w-4 h-4 text-amber-500 flex-none" />
+              <div>
+                <p className="text-xs font-semibold text-amber-700">Flagged for review</p>
+                <p className="text-xs text-amber-600 mt-0.5">{transaction.review_reason}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Category + source */}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs text-gray-400 mb-1">Category</p>
+              <span className={`inline-flex items-center px-3 py-1 rounded-lg text-sm font-semibold ${CATEGORY_COLORS[cat] ?? 'bg-gray-100 text-gray-600'}`}>
+                {CATEGORY_LABELS[cat] ?? transaction.category}
+              </span>
+            </div>
+            {src && (
+              <div className="text-right">
+                <p className="text-xs text-gray-400 mb-1">Classification</p>
+                <span className={`inline-flex items-center px-3 py-1 rounded-lg text-sm font-medium ${SOURCE_CONFIG[src]?.className ?? 'bg-gray-100 text-gray-600'}`}>
+                  {SOURCE_CONFIG[src]?.label ?? src}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Confidence bar */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-xs text-gray-400">Confidence</p>
+              <span className={`text-sm font-bold tabular-nums ${
+                confidence >= 90 ? 'text-emerald-600'
+                : confidence >= 70 ? 'text-amber-600'
+                : 'text-red-600'
+              }`}>{confidence}%</span>
+            </div>
+            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${
+                  confidence >= 90 ? 'bg-emerald-500'
+                  : confidence >= 70 ? 'bg-amber-400'
+                  : 'bg-red-500'
+                }`}
+                style={{ width: `${confidence}%` }}
+              />
+            </div>
+          </div>
+
+          {/* AI Reasoning */}
+          {transaction.reasoning && (
+            <div>
+              <div className="flex items-center gap-1.5 mb-2">
+                <BrainIcon className="w-3.5 h-3.5 text-gray-400" />
+                <p className="text-xs text-gray-400">AI Reasoning</p>
+              </div>
+              <blockquote className="text-sm text-gray-700 leading-relaxed bg-gray-50 border-l-4 border-indigo-300 px-4 py-3 rounded-r-lg italic">
+                {transaction.reasoning}
+              </blockquote>
+            </div>
+          )}
+
+          {/* Match source */}
+          {matchSrc && (
+            <div className="flex items-center justify-between py-3 px-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center gap-2">
+                <ReceiptIcon className="w-4 h-4 text-gray-400" />
+                <p className="text-sm text-gray-600">Evidence match</p>
+              </div>
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${MATCH_SOURCE_CONFIG[matchSrc]?.className ?? 'bg-gray-100 text-gray-500'}`}>
+                {MATCH_SOURCE_CONFIG[matchSrc]?.label ?? matchSrc}
+              </span>
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 pb-6">
+          <button
+            onClick={onClose}
+            className="w-full py-2.5 border border-gray-200 hover:border-gray-300 text-gray-600 text-sm font-medium rounded-lg transition-colors cursor-pointer"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Client Detail View ───────────────────────────────────────────────────────
+
+function ClientDetailView({
+  client,
+  onBack,
+}: {
+  client: ClientRecord
+  onBack: () => void
+}) {
+  const [savedTransactions, setSavedTransactions] = useState<SavedTransaction[]>([])
+  const [loading,           setLoading]           = useState(true)
+  const [selected,          setSelected]          = useState<SavedTransaction | null>(null)
+
+  useEffect(() => {
+    getClientTransactions(client.id)
+      .then(setSavedTransactions)
+      .finally(() => setLoading(false))
+  }, [client.id])
+
+  const income   = savedTransactions.filter((t) => Number(t.amount) > 0).reduce((s, t) => s + Number(t.amount), 0)
+  const expenses = savedTransactions.filter((t) => Number(t.amount) < 0).reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+
+  return (
+    <>
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-8 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onBack}
+            className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+          >
+            <ChevronLeftIcon className="w-4 h-4" />
+            Clients
+          </button>
+          <div className="w-px h-4 bg-gray-200" />
+          <div>
+            <h1 className="text-base font-semibold text-gray-900">{client.name}</h1>
+            <p className="text-xs text-gray-400 mt-0.5">{BUSINESS_TYPE_LABELS[client.business_type]}</p>
+          </div>
+        </div>
+        {client.utr && (
+          <span className="text-xs text-gray-400 font-mono">UTR: {client.utr}</span>
+        )}
+      </div>
+
+      <div className="px-8 py-6 space-y-5 max-w-7xl">
+        {!loading && savedTransactions.length > 0 && (
+          <div className="grid grid-cols-3 gap-4">
+            <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full bg-slate-400" />
+                <p className="text-xs text-gray-500 font-medium">Total Transactions</p>
+              </div>
+              <p className="text-2xl font-bold tracking-tight text-gray-900">{savedTransactions.length}</p>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <p className="text-xs text-gray-500 font-medium">Total Income</p>
+              </div>
+              <p className="text-2xl font-bold tracking-tight text-emerald-700">£{income.toFixed(2)}</p>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full bg-red-500" />
+                <p className="text-xs text-gray-500 font-medium">Total Expenses</p>
+              </div>
+              <p className="text-2xl font-bold tracking-tight text-red-600">£{expenses.toFixed(2)}</p>
+            </div>
+          </div>
+        )}
+
+        <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Transaction History
+              {!loading && (
+                <span className="ml-2 text-xs font-normal text-gray-400">
+                  {savedTransactions.length} record{savedTransactions.length !== 1 ? 's' : ''}
+                </span>
+              )}
+            </h2>
+          </div>
+
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <SpinnerIcon className="w-5 h-5 animate-spin text-gray-400" />
+            </div>
+          ) : savedTransactions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <p className="text-sm font-medium text-gray-500">No transactions yet</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Select this client on the Dashboard and run a categorisation to save results here
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50/70">
+                    <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Merchant</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Amount</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Category</th>
+                    <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Confidence</th>
+                    <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                    <th className="px-4 py-3" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {savedTransactions.map((t) => {
+                    const amt = Number(t.amount)
+                    const cat = t.category as TransactionCategory
+                    return (
+                      <tr
+                        key={t.id}
+                        onClick={() => setSelected(t)}
+                        className={`cursor-pointer transition-colors ${confidenceRowClass(t.confidence_score)}`}
+                      >
+                        <td className="px-6 py-3.5 text-xs text-gray-500 font-mono whitespace-nowrap">
+                          {new Date(t.date).toLocaleDateString('en-GB')}
+                        </td>
+                        <td className="px-4 py-3.5 font-medium text-gray-900 max-w-[200px] truncate">
+                          {t.merchant ?? t.description ?? '—'}
+                          {t.review_reason && (
+                            <span className="ml-1.5 inline-flex items-center">
+                              <AlertIcon className="w-3 h-3 text-amber-500" />
+                            </span>
+                          )}
+                        </td>
+                        <td className={`px-4 py-3.5 text-right font-mono font-semibold tabular-nums whitespace-nowrap ${amt >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                          {amt >= 0 ? `+£${amt.toFixed(2)}` : `-£${Math.abs(amt).toFixed(2)}`}
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ${CATEGORY_COLORS[cat] ?? 'bg-gray-100 text-gray-600'}`}>
+                            {CATEGORY_LABELS[cat] ?? t.category}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5 text-center">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold tabular-nums ${confidenceBadgeClass(t.confidence_score)}`}>
+                            {t.confidence_score}%
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5 text-center">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                            t.status === 'auto_approved' || t.status === 'reviewed'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : t.status === 'flagged'
+                              ? 'bg-amber-100 text-amber-700'
+                              : 'bg-gray-100 text-gray-500'
+                          }`}>
+                            {t.status === 'auto_approved' ? 'Approved'
+                              : t.status === 'reviewed' ? 'Reviewed'
+                              : t.status === 'flagged'   ? 'Flagged'
+                              : 'Pending'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5 text-gray-300">
+                          <ChevronRightIcon className="w-4 h-4" />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {selected && (
+        <HistoryDetailModal
+          transaction={selected}
+          onClose={() => setSelected(null)}
+        />
+      )}
+    </>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const [businessType, setBusinessType] = useState<BusinessType>('taxi')
-  const [transactions, setTransactions] = useState<DashboardTransaction[]>([])
-  const [isProcessing, setIsProcessing] = useState(false)
-  const [selected, setSelected] = useState<DashboardTransaction | null>(null)
-  const [merchantMemory, setMerchantMemory] = useState<MerchantMemory>(new Map())
+  // ── Navigation ──
+  const [currentView,   setCurrentView]   = useState<View>('dashboard')
+  const [viewingClient, setViewingClient] = useState<ClientRecord | null>(null)
+
+  // ── Client selector (dashboard topbar) ──
+  const [allClients,       setAllClients]       = useState<ClientRecord[]>([])
+  const [selectedClient,   setSelectedClient]   = useState<ClientRecord | null>(null)
+  const [showCreateClient, setShowCreateClient] = useState(false)
+
+  // ── Dashboard run state ──
+  const [transactions,      setTransactions]      = useState<DashboardTransaction[]>([])
+  const [isProcessing,      setIsProcessing]      = useState(false)
+  const [selected,          setSelected]          = useState<DashboardTransaction | null>(null)
+  const [merchantMemory,    setMerchantMemory]    = useState<MerchantMemory>(new Map())
+  const [bankFiles,         setBankFiles]         = useState<File[]>([])
+  const [platformFiles,     setPlatformFiles]     = useState<File[]>([])
+  const [receiptFiles,      setReceiptFiles]      = useState<File[]>([])
+  const [error,             setError]             = useState<string | null>(null)
+  const [parseWarnings,     setParseWarnings]     = useState<string[]>([])
+  const [unmatchedPayouts,  setUnmatchedPayouts]  = useState<UnmatchedPayout[]>([])
+  const [unmatchedReceipts, setUnmatchedReceipts] = useState<UnmatchedReceipt[]>([])
+  const [isBulkSaving,      setIsBulkSaving]      = useState(false)
+
+  // businessType is always derived from the selected client
+  const businessType: BusinessType = selectedClient?.business_type ?? 'taxi'
+
+  // Load all clients on mount
   useEffect(() => {
-    loadConfirmedRules(businessType).then((rules) => {
-      if (rules.length === 0) return
+    getClients().then(setAllClients)
+  }, [])
+
+  // Reload merchant memory whenever the selected client changes
+  useEffect(() => {
+    if (!selectedClient) { setMerchantMemory(new Map()); return }
+    loadConfirmedRules(selectedClient.business_type).then((rules) => {
+      if (rules.length === 0) { setMerchantMemory(new Map()); return }
       setMerchantMemory(
         new Map(rules.map((r) => [r.pattern, { category: r.category, pattern: r.pattern }])),
       )
     })
-  }, [])
+  }, [selectedClient?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [bankFiles, setBankFiles] = useState<File[]>([])
-  const [platformFiles, setPlatformFiles] = useState<File[]>([])
-  const [receiptFiles, setReceiptFiles] = useState<File[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [parseWarnings, setParseWarnings] = useState<string[]>([])
-  const [unmatchedPayouts, setUnmatchedPayouts] = useState<UnmatchedPayout[]>([])
-  const [unmatchedReceipts, setUnmatchedReceipts] = useState<UnmatchedReceipt[]>([])
+  // ── Handlers ──
+
+  function handleNavigate(view: View) {
+    setCurrentView(view)
+    if (view !== 'client-detail') setViewingClient(null)
+  }
+
+  function handleViewClient(client: ClientRecord) {
+    setViewingClient(client)
+    setCurrentView('client-detail')
+  }
 
   async function handleProcess() {
     if (bankFiles.length === 0) return
+    if (!selectedClient) {
+      setError('Please select a client before running')
+      return
+    }
+
     setIsProcessing(true)
     setError(null)
     setParseWarnings([])
@@ -894,13 +1509,12 @@ export default function DashboardPage() {
       let newUnmatchedReceipts: UnmatchedReceipt[] = []
 
       if (receiptFiles.length > 0) {
-        const MAX_FILE_SIZE  = 10 * 1024 * 1024 // 10 MB
+        const MAX_FILE_SIZE   = 10 * 1024 * 1024
         const SUPPORTED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
-        const CONCURRENCY    = 3
+        const CONCURRENCY     = 3
 
-        // Validate files before encoding — reject oversized or wrong type early
-        const validFiles: File[]    = []
-        const validationWarnings: string[] = []
+        const validFiles: File[]             = []
+        const validationWarnings: string[]   = []
         for (const file of receiptFiles) {
           if (!SUPPORTED_TYPES.includes(file.type)) {
             validationWarnings.push(`Receipt "${file.name}" skipped — unsupported type ${file.type}`)
@@ -910,11 +1524,8 @@ export default function DashboardPage() {
             validFiles.push(file)
           }
         }
-        if (validationWarnings.length > 0) {
-          setParseWarnings((w) => [...w, ...validationWarnings])
-        }
+        if (validationWarnings.length > 0) setParseWarnings((w) => [...w, ...validationWarnings])
 
-        // Chunked base64 encoding — avoids call stack overflow on large files
         const toBase64 = async (file: File): Promise<string> => {
           const buffer = await file.arrayBuffer()
           const bytes  = new Uint8Array(buffer)
@@ -934,7 +1545,6 @@ export default function DashboardPage() {
           })),
         )
 
-        // Process in batches of CONCURRENCY to avoid overwhelming the API
         const allExtracted: ExtractedReceipt[] = []
         const allFailed: Array<{ fileName: string; reason: string }> = []
         for (let i = 0; i < encoded.length; i += CONCURRENCY) {
@@ -966,7 +1576,6 @@ export default function DashboardPage() {
       const mapped: DashboardTransaction[] = rows.map((r, i) => {
         const platformMatch = matchMap.get(i)
         const receiptMatch  = receiptMap.get(i)
-        // Receipt match takes precedence for expenses; platform match for income
         const matchSource: MatchSource = platformMatch?.matchSource === 'platform'
           ? 'platform'
           : receiptMatch
@@ -974,19 +1583,19 @@ export default function DashboardPage() {
           : 'unmatched'
         return {
           id: String(i),
-          date: r.date,
-          description: r.description,
-          merchant: r.merchant ?? r.description,
-          amount: r.amount,
-          category: r.category,
-          confidence: r.confidence,
-          source: r.source,
-          reasoning: r.reasoning ?? '',
+          date:           r.date,
+          description:    r.description,
+          merchant:       r.merchant ?? r.description,
+          amount:         r.amount,
+          category:       r.category,
+          confidence:     r.confidence,
+          source:         r.source,
+          reasoning:      r.reasoning ?? '',
           matchSource,
           matchedRow:     platformMatch?.matchedRow,
           matchedReceipt: receiptMatch?.matchedReceipt,
-          status: r.confidence >= 80 ? 'approved' : 'flagged',
-          reviewReason: r.confidence < 80 ? 'Low confidence — please review' : undefined,
+          status:         r.confidence >= 80 ? 'approved' : 'flagged',
+          reviewReason:   r.confidence < 80 ? 'Low confidence — please review' : undefined,
           matchedPattern: r.matchedPattern,
         }
       })
@@ -994,6 +1603,28 @@ export default function DashboardPage() {
       setTransactions(applyMemory(mapped, merchantMemory))
       setUnmatchedPayouts(newUnmatched)
       setUnmatchedReceipts(newUnmatchedReceipts)
+
+      // 6. Persist to Supabase under the selected client
+      try {
+        await saveRunTransactions(
+          selectedClient.id,
+          mapped.map((t) => ({
+            date:           t.date,
+            amount:         t.amount,
+            merchant:       t.merchant || null,
+            description:    t.description,
+            category:       t.category,
+            confidence:     t.confidence,
+            reasoning:      t.reasoning,
+            source:         t.source,
+            matchSource:    t.matchSource,
+            matchedPattern: t.matchedPattern ?? null,
+            reviewReason:   t.reviewReason ?? null,
+          })),
+        )
+      } catch (saveErr) {
+        setError(`Categorisation complete but results could not be saved: ${(saveErr as Error).message}`)
+      }
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -1037,7 +1668,6 @@ export default function DashboardPage() {
 
     const pattern = tx.matchedPattern ?? tx.merchant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').toUpperCase()
 
-    // Optimistic update — show approved immediately
     setTransactions((prev) =>
       prev.map((t) => t.id === id ? { ...t, status: 'approved' as const, reviewReason: undefined } : t),
     )
@@ -1046,15 +1676,12 @@ export default function DashboardPage() {
     try {
       await confirmTransaction(pattern, tx.category, businessType)
     } catch {
-      // Revert — rule did not save, user needs to know
       setTransactions((prev) =>
         prev.map((t) => t.id === id ? { ...t, status: tx.status, reviewReason: tx.reviewReason } : t),
       )
       setError('Failed to save rule — please try again.')
     }
   }
-
-  const [isBulkSaving, setIsBulkSaving] = useState(false)
 
   async function handleBulkApprove(eligible: DashboardTransaction[]) {
     if (eligible.length === 0) return
@@ -1069,7 +1696,6 @@ export default function DashboardPage() {
     try {
       await bulkConfirmTransactions(rules, businessType)
 
-      // Update UI and memory for all approved transactions
       const patternSet = new Set(rules.map((r) => r.pattern))
       setTransactions((prev) =>
         prev.map((t) => {
@@ -1091,149 +1717,199 @@ export default function DashboardPage() {
   }
 
   function handleRecategorise(id: string) {
-    // Placeholder — would open a category picker
     console.log('Recategorise:', id)
   }
 
+  // ── Render ──
+
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 font-sans">
-      <Sidebar />
+      <Sidebar currentView={currentView} onNavigate={handleNavigate} />
 
       <main className="flex-1 overflow-y-auto">
-        {/* Topbar */}
-        <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-8 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div>
-              <h1 className="text-base font-semibold text-gray-900">Dashboard</h1>
-              <p className="text-xs text-gray-400 mt-0.5">Tax year 2025–26</p>
-            </div>
-            <select
-              value={businessType}
-              onChange={(e) => {
-                setBusinessType(e.target.value as BusinessType)
-                setTransactions([])
-                setMerchantMemory(new Map())
-              }}
-              className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
-            >
-              <option value="taxi">Taxi driver</option>
-              <option value="mechanic">Mechanic</option>
-              <option value="plumber">Plumber</option>
-            </select>
-          </div>
-          <div className="flex items-center gap-2">
-            {merchantMemory.size > 0 && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-600">
-                <BrainIcon className="w-3 h-3" />
-                {merchantMemory.size} rule{merchantMemory.size !== 1 ? 's' : ''} saved
-              </span>
-            )}
-            {transactions.length > 0 && (
-              <button
-                onClick={handleDownload}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
-              >
-                <UploadIcon className="w-3.5 h-3.5 rotate-180" />
-                Download CSV
-              </button>
-            )}
-            <span className="text-xs text-gray-400">29 Mar 2026</span>
-            <div className="w-px h-4 bg-gray-200" />
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-600">
-              Beta
-            </span>
-          </div>
-        </div>
 
-        {/* Content */}
-        <div className="px-8 py-6 space-y-5 max-w-7xl">
-          <UploadPanel
-            onProcess={handleProcess}
-            isProcessing={isProcessing}
-            bankStatements={bankFiles}
-            onBankStatementsChange={setBankFiles}
-            platformStatements={platformFiles}
-            onPlatformStatementsChange={setPlatformFiles}
-            receipts={receiptFiles}
-            onReceiptsChange={setReceiptFiles}
+        {/* ── Dashboard view ── */}
+        {currentView === 'dashboard' && (
+          <>
+            <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-8 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div>
+                  <h1 className="text-base font-semibold text-gray-900">Dashboard</h1>
+                  <p className="text-xs text-gray-400 mt-0.5">Tax year 2025–26</p>
+                </div>
+
+                {/* Client selector */}
+                <div className="flex items-center gap-2">
+                  <select
+                    value={selectedClient?.id ?? ''}
+                    onChange={(e) => {
+                      const client = allClients.find((c) => c.id === e.target.value) ?? null
+                      setSelectedClient(client)
+                      setTransactions([])
+                      setMerchantMemory(new Map())
+                    }}
+                    className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  >
+                    <option value="">Select client…</option>
+                    {allClients.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setShowCreateClient(true)}
+                    className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-indigo-600 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    + New
+                  </button>
+                </div>
+
+                {selectedClient && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-indigo-50 text-indigo-700">
+                    {BUSINESS_TYPE_LABELS[selectedClient.business_type]}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {merchantMemory.size > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-600">
+                    <BrainIcon className="w-3 h-3" />
+                    {merchantMemory.size} rule{merchantMemory.size !== 1 ? 's' : ''} saved
+                  </span>
+                )}
+                {transactions.length > 0 && (
+                  <button
+                    onClick={handleDownload}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
+                  >
+                    <UploadIcon className="w-3.5 h-3.5 rotate-180" />
+                    Download CSV
+                  </button>
+                )}
+                <span className="text-xs text-gray-400">29 Mar 2026</span>
+                <div className="w-px h-4 bg-gray-200" />
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-600">
+                  Beta
+                </span>
+              </div>
+            </div>
+
+            <div className="px-8 py-6 space-y-5 max-w-7xl">
+              <UploadPanel
+                onProcess={handleProcess}
+                isProcessing={isProcessing}
+                bankStatements={bankFiles}
+                onBankStatementsChange={setBankFiles}
+                platformStatements={platformFiles}
+                onPlatformStatementsChange={setPlatformFiles}
+                receipts={receiptFiles}
+                onReceiptsChange={setReceiptFiles}
+              />
+
+              {error && (
+                <div className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+                  <AlertIcon className="w-4 h-4 text-red-500 flex-none mt-0.5" />
+                  <div>
+                    <p className="font-semibold">Failed to process</p>
+                    <p className="mt-0.5 text-red-600">{error}</p>
+                  </div>
+                </div>
+              )}
+
+              {unmatchedReceipts.length > 0 && (
+                <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
+                  <AlertIcon className="w-4 h-4 text-amber-500 flex-none mt-0.5" />
+                  <div>
+                    <p className="font-semibold">
+                      {unmatchedReceipts.length} receipt{unmatchedReceipts.length !== 1 ? 's' : ''} not found in bank statement
+                    </p>
+                    <ul className="mt-1 space-y-0.5 text-amber-600">
+                      {unmatchedReceipts.map((u, i) => (
+                        <li key={i}>{u.receipt.fileName} — {u.reason}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {unmatchedPayouts.length > 0 && (
+                <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
+                  <AlertIcon className="w-4 h-4 text-amber-500 flex-none mt-0.5" />
+                  <div>
+                    <p className="font-semibold">
+                      {unmatchedPayouts.length} Uber payout{unmatchedPayouts.length !== 1 ? 's' : ''} not found in bank statement
+                    </p>
+                    <ul className="mt-1 space-y-0.5 text-amber-600">
+                      {unmatchedPayouts.map((u, i) => (
+                        <li key={i}>{u.row.sourceLabel} — {u.reason}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {parseWarnings.length > 0 && (
+                <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
+                  <AlertIcon className="w-4 h-4 text-amber-500 flex-none mt-0.5" />
+                  <div>
+                    <p className="font-semibold">{parseWarnings.length} row{parseWarnings.length !== 1 ? 's' : ''} skipped during import</p>
+                    <ul className="mt-1 space-y-0.5 text-amber-600">
+                      {parseWarnings.map((w, i) => <li key={i}>{w}</li>)}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              <SummaryCards transactions={transactions} />
+              {transactions.length > 0 && (
+                <BulkApproveBar
+                  transactions={transactions}
+                  onApprove={handleBulkApprove}
+                  isSaving={isBulkSaving}
+                />
+              )}
+              <TransactionsTable transactions={transactions} onSelect={setSelected} />
+            </div>
+          </>
+        )}
+
+        {/* ── Clients view ── */}
+        {currentView === 'clients' && (
+          <ClientsView
+            onViewClient={handleViewClient}
+            onNewClient={(client) => setAllClients((prev) => [client, ...prev])}
           />
+        )}
 
-          {/* Error banner */}
-          {error && (
-            <div className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
-              <AlertIcon className="w-4 h-4 text-red-500 flex-none mt-0.5" />
-              <div>
-                <p className="font-semibold">Failed to process</p>
-                <p className="mt-0.5 text-red-600">{error}</p>
-              </div>
-            </div>
-          )}
+        {/* ── Client detail view ── */}
+        {currentView === 'client-detail' && viewingClient && (
+          <ClientDetailView
+            client={viewingClient}
+            onBack={() => setCurrentView('clients')}
+          />
+        )}
 
-          {/* Unmatched receipts */}
-          {unmatchedReceipts.length > 0 && (
-            <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
-              <AlertIcon className="w-4 h-4 text-amber-500 flex-none mt-0.5" />
-              <div>
-                <p className="font-semibold">
-                  {unmatchedReceipts.length} receipt{unmatchedReceipts.length !== 1 ? 's' : ''} not found in bank statement
-                </p>
-                <ul className="mt-1 space-y-0.5 text-amber-600">
-                  {unmatchedReceipts.map((u, i) => (
-                    <li key={i}>{u.receipt.fileName} — {u.reason}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          )}
-
-          {/* Unmatched platform payouts */}
-          {unmatchedPayouts.length > 0 && (
-            <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
-              <AlertIcon className="w-4 h-4 text-amber-500 flex-none mt-0.5" />
-              <div>
-                <p className="font-semibold">
-                  {unmatchedPayouts.length} Uber payout{unmatchedPayouts.length !== 1 ? 's' : ''} not found in bank statement
-                </p>
-                <ul className="mt-1 space-y-0.5 text-amber-600">
-                  {unmatchedPayouts.map((u, i) => (
-                    <li key={i}>{u.row.sourceLabel} — {u.reason}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          )}
-
-          {/* Parse warnings */}
-          {parseWarnings.length > 0 && (
-            <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
-              <AlertIcon className="w-4 h-4 text-amber-500 flex-none mt-0.5" />
-              <div>
-                <p className="font-semibold">{parseWarnings.length} row{parseWarnings.length !== 1 ? 's' : ''} skipped during import</p>
-                <ul className="mt-1 space-y-0.5 text-amber-600">
-                  {parseWarnings.map((w, i) => <li key={i}>{w}</li>)}
-                </ul>
-              </div>
-            </div>
-          )}
-
-          <SummaryCards transactions={transactions} />
-          {transactions.length > 0 && (
-            <BulkApproveBar
-              transactions={transactions}
-              onApprove={handleBulkApprove}
-              isSaving={isBulkSaving}
-            />
-          )}
-          <TransactionsTable transactions={transactions} onSelect={setSelected} />
-        </div>
       </main>
 
-      {selected && (
+      {selected && currentView === 'dashboard' && (
         <DetailModal
           transaction={selected}
           onClose={() => setSelected(null)}
           onApprove={handleApprove}
           onRecategorise={handleRecategorise}
+        />
+      )}
+
+      {showCreateClient && (
+        <CreateClientModal
+          onClose={() => setShowCreateClient(false)}
+          onCreated={(client) => {
+            setAllClients((prev) => [client, ...prev])
+            setSelectedClient(client)
+            setTransactions([])
+            setMerchantMemory(new Map())
+            setShowCreateClient(false)
+          }}
         />
       )}
     </div>

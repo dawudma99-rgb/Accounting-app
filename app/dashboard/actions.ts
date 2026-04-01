@@ -11,6 +11,47 @@ import type {
   TransactionCategory,
 } from '@/types/transaction'
 
+// ─── Client types ─────────────────────────────────────────────────────────────
+
+export interface ClientRecord {
+  id: string
+  name: string
+  business_type: BusinessType
+  utr: string | null
+  created_at: string
+}
+
+export interface TransactionToSave {
+  date: string
+  amount: number
+  merchant: string | null
+  description: string
+  category: TransactionCategory
+  confidence: number
+  reasoning: string
+  source: 'ai' | 'rules' | 'hardcoded' | 'memory'
+  matchSource: 'receipt' | 'receipt-uncertain' | 'platform' | 'unmatched'
+  matchedPattern?: string | null
+  reviewReason?: string | null
+}
+
+export interface SavedTransaction {
+  id: string
+  date: string
+  amount: number
+  merchant: string | null
+  description: string | null
+  category: string
+  confidence_score: number
+  status: string
+  reasoning: string | null
+  source: string | null
+  match_source: string | null
+  matched_pattern: string | null
+  review_reason: string | null
+  created_at: string
+}
+
 // ─── Process a batch of transactions ─────────────────────────────────────────
 
 export interface ProcessedRow {
@@ -119,6 +160,92 @@ export async function bulkConfirmTransactions(
 
   if (error) throw new Error(error.message)
 }
+
+// ─── Client CRUD ──────────────────────────────────────────────────────────────
+
+/**
+ * Fetch all clients ordered by creation date descending.
+ */
+export async function getClients(): Promise<ClientRecord[]> {
+  const { data, error } = await supabaseServer
+    .from('clients')
+    .select('id, name, business_type, utr, created_at')
+    .order('created_at', { ascending: false })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []) as ClientRecord[]
+}
+
+/**
+ * Create a new client and return the inserted row.
+ */
+export async function createClient(input: {
+  name: string
+  businessType: BusinessType
+  utr?: string | null
+}): Promise<ClientRecord> {
+  const { data, error } = await supabaseServer
+    .from('clients')
+    .insert({
+      name:          input.name,
+      business_type: input.businessType,
+      utr:           input.utr ?? null,
+    })
+    .select('id, name, business_type, utr, created_at')
+    .single()
+
+  if (error) throw new Error(error.message)
+  return data as ClientRecord
+}
+
+/**
+ * Bulk-insert categorised transactions from a run under a given client.
+ * Each row maps to the transactions table schema.
+ */
+export async function saveRunTransactions(
+  clientId: string,
+  transactions: TransactionToSave[],
+): Promise<void> {
+  if (transactions.length === 0) return
+
+  const { error } = await supabaseServer
+    .from('transactions')
+    .insert(
+      transactions.map((t) => ({
+        client_id:        clientId,
+        date:             t.date,
+        amount:           t.amount,
+        merchant:         t.merchant,
+        description:      t.description,
+        category:         t.category,
+        confidence_score: t.confidence,
+        status:           t.confidence >= 80 ? 'auto_approved' : 'flagged',
+        reasoning:        t.reasoning,
+        source:           t.source,
+        match_source:     t.matchSource,
+        matched_pattern:  t.matchedPattern ?? null,
+        review_reason:    t.reviewReason ?? null,
+      })),
+    )
+
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * Fetch all saved transactions for a client, newest first.
+ */
+export async function getClientTransactions(clientId: string): Promise<SavedTransaction[]> {
+  const { data, error } = await supabaseServer
+    .from('transactions')
+    .select('id, date, amount, merchant, description, category, confidence_score, status, reasoning, source, match_source, matched_pattern, review_reason, created_at')
+    .eq('client_id', clientId)
+    .order('date', { ascending: false })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []) as SavedTransaction[]
+}
+
+// ─── Rules ────────────────────────────────────────────────────────────────────
 
 /**
  * Load all user-confirmed rules (confidence >= 99) for a given business type.
