@@ -18,16 +18,19 @@ import {
   createClient,
   getClientTransactions,
   getClients,
+  getTaxSummary,
   loadConfirmedRules,
   ocrReceipts,
   processTransactions,
   saveRunTransactions,
 } from './actions'
 import type { ClientRecord, SavedTransaction } from './actions'
+import { DEFAULT_TAX_YEAR, getAvailableTaxYears } from '@/config/taxYears'
+import type { TaxSummary } from '@/types/tax'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type View = 'dashboard' | 'clients' | 'client-detail'
+type View = 'dashboard' | 'clients' | 'client-detail' | 'tax'
 
 type MatchSource = 'receipt' | 'receipt-uncertain' | 'platform' | 'unmatched'
 
@@ -189,6 +192,16 @@ function AlertIcon({ className }: { className?: string }) {
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
       <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  )
+}
+function TaxIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="9" y1="13" x2="15" y2="13" /><line x1="9" y1="17" x2="12" y2="17" />
+      <line x1="9" y1="9" x2="10" y2="9" />
     </svg>
   )
 }
@@ -367,6 +380,7 @@ function Sidebar({
   }> = [
     { label: 'Dashboard',    icon: GridIcon,     view: 'dashboard' },
     { label: 'Clients',      icon: UsersIcon,    view: 'clients'   },
+    { label: 'Tax Summary',  icon: TaxIcon,      view: 'tax'       },
     { label: 'Transactions', icon: ListIcon,     view: null        },
     { label: 'Receipts',     icon: ReceiptIcon,  view: null        },
     { label: 'Settings',     icon: SettingsIcon, view: null        },
@@ -1398,6 +1412,309 @@ function ClientDetailView({
   )
 }
 
+// ─── Tax Summary View ─────────────────────────────────────────────────────────
+
+function TaxView({
+  selectedClient,
+  allClients,
+  onSelectClient,
+}: {
+  selectedClient:  ClientRecord | null
+  allClients:      ClientRecord[]
+  onSelectClient:  (c: ClientRecord | null) => void
+}) {
+  const availableYears                          = getAvailableTaxYears()
+  const [taxYear,       setTaxYear]             = useState(DEFAULT_TAX_YEAR)
+  const [milesInput,    setMilesInput]           = useState('')
+  const [appliedMiles,  setAppliedMiles]         = useState<number | undefined>(undefined)
+  const [summary,       setSummary]              = useState<TaxSummary | null>(null)
+  const [loading,       setLoading]              = useState(false)
+  const [error,         setError]                = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!selectedClient) { setSummary(null); return }
+    setLoading(true)
+    setError(null)
+    getTaxSummary(selectedClient.id, taxYear, appliedMiles)
+      .then(setSummary)
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [selectedClient?.id, taxYear, appliedMiles]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handleApplyMileage() {
+    const miles = Number(milesInput.replace(/,/g, ''))
+    if (!Number.isFinite(miles) || miles <= 0) return
+    setAppliedMiles(miles)
+  }
+
+  function handleClearMileage() {
+    setMilesInput('')
+    setAppliedMiles(undefined)
+  }
+
+  function fmt(n: number): string {
+    return `£${Math.abs(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  }
+
+  return (
+    <>
+      {/* ── Header ── */}
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-8 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-base font-semibold text-gray-900">Tax Summary</h1>
+            <p className="text-xs text-gray-400 mt-0.5">Self-employment profit calculation</p>
+          </div>
+
+          <select
+            value={selectedClient?.id ?? ''}
+            onChange={(e) => {
+              const client = allClients.find((c) => c.id === e.target.value) ?? null
+              onSelectClient(client)
+            }}
+            className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          >
+            <option value="">Select client…</option>
+            {allClients.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+
+          <select
+            value={taxYear}
+            onChange={(e) => { setTaxYear(e.target.value); setAppliedMiles(undefined); setMilesInput('') }}
+            className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          >
+            {availableYears.map((y) => (
+              <option key={y} value={y}>Tax year {y}</option>
+            ))}
+          </select>
+        </div>
+
+        {summary && summary.flaggedTransactionCount > 0 && (
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg">
+            <AlertIcon className="w-4 h-4 text-amber-500 flex-none" />
+            <span className="text-xs text-amber-700 font-medium">
+              {summary.flaggedTransactionCount} flagged transaction{summary.flaggedTransactionCount !== 1 ? 's' : ''} excluded — resolve in Dashboard first
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="px-8 py-6 space-y-5 max-w-4xl">
+
+        {!selectedClient ? (
+          <div className="flex flex-col items-center justify-center py-24 text-center">
+            <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
+              <TaxIcon className="w-6 h-6 text-gray-400" />
+            </div>
+            <p className="text-sm font-medium text-gray-500">No client selected</p>
+            <p className="text-xs text-gray-400 mt-1">Select a client above to view their tax summary</p>
+          </div>
+        ) : loading ? (
+          <div className="flex items-center justify-center py-24">
+            <SpinnerIcon className="w-5 h-5 animate-spin text-gray-400" />
+          </div>
+        ) : error ? (
+          <div className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+            <AlertIcon className="w-4 h-4 text-red-500 flex-none mt-0.5" />
+            <p>{error}</p>
+          </div>
+        ) : !summary ? null : (
+          <>
+            {/* ── Summary cards ── */}
+            <div className="grid grid-cols-3 gap-4">
+              <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  <p className="text-xs text-gray-500 font-medium">Turnover</p>
+                </div>
+                <p className="text-2xl font-bold tracking-tight text-emerald-700">{fmt(summary.turnover)}</p>
+                <p className="text-xs text-gray-400 mt-1">{summary.incomeCount} income transaction{summary.incomeCount !== 1 ? 's' : ''}</p>
+              </div>
+              <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                  <p className="text-xs text-gray-500 font-medium">Total Allowable Expenses</p>
+                </div>
+                <p className="text-2xl font-bold tracking-tight text-red-600">{fmt(summary.totalAllowableExpenses)}</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  Vehicle: {summary.vehicle.chosenMethod === 'mileage' ? 'mileage method' : 'actual costs'}
+                </p>
+              </div>
+              <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className={`w-2 h-2 rounded-full ${summary.netProfit >= 0 ? 'bg-indigo-500' : 'bg-red-400'}`} />
+                  <p className="text-xs text-gray-500 font-medium">{summary.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</p>
+                </div>
+                <p className={`text-2xl font-bold tracking-tight ${summary.netProfit >= 0 ? 'text-indigo-700' : 'text-red-600'}`}>
+                  {summary.netProfit < 0 ? '−' : ''}{fmt(summary.netProfit)}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">Turnover minus all deductions</p>
+              </div>
+            </div>
+
+            {/* ── Detailed breakdown ── */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100">
+                <h2 className="text-sm font-semibold text-gray-900">Expense Breakdown</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Tax year {summary.taxYear} · {summary.approvedTransactionCount} approved transactions</p>
+              </div>
+
+              {/* Non-vehicle expenses */}
+              {summary.nonVehicleExpenses.length > 0 && (
+                <div className="px-6 py-4 border-b border-gray-100">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Non-vehicle expenses</p>
+                  <div className="space-y-2.5">
+                    {summary.nonVehicleExpenses.map((exp) => (
+                      <div key={exp.category} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${CATEGORY_COLORS[exp.category]}`}>
+                            {CATEGORY_LABELS[exp.category]}
+                          </span>
+                          <span className="text-xs text-gray-400">{exp.count} transaction{exp.count !== 1 ? 's' : ''}</span>
+                        </div>
+                        <span className="text-sm font-semibold text-gray-800 tabular-nums">{fmt(exp.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex justify-between items-center pt-3 mt-3 border-t border-gray-100">
+                    <span className="text-xs font-semibold text-gray-500">Subtotal — non-vehicle</span>
+                    <span className="text-sm font-bold text-gray-700 tabular-nums">{fmt(summary.totalNonVehicleExpenses)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Vehicle expenses */}
+              <div className="px-6 py-4 border-b border-gray-100">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Vehicle expenses</p>
+
+                <div className="space-y-3">
+                  {/* Actual costs row */}
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <span className="text-sm text-gray-700">Actual fuel / vehicle costs</span>
+                      {summary.vehicle.chosenMethod === 'actual' && summary.vehicle.mileageAllowance !== null && (
+                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-600">
+                          ✓ Using this · saves {fmt(summary.vehicle.saving!)}
+                        </span>
+                      )}
+                      {summary.vehicle.chosenMethod === 'actual' && summary.vehicle.mileageAllowance === null && (
+                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-600">
+                          Using this
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-sm font-semibold text-gray-800 tabular-nums">{fmt(summary.vehicle.actualCosts)}</span>
+                  </div>
+
+                  {/* Mileage allowance row */}
+                  {summary.vehicle.mileageAllowance !== null && (
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <span className="text-sm text-gray-700">
+                          HMRC mileage allowance ({summary.vehicle.businessMiles!.toLocaleString()} miles)
+                        </span>
+                        {summary.vehicle.chosenMethod === 'mileage' && (
+                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-600">
+                            ✓ Using this · saves {fmt(summary.vehicle.saving!)}
+                          </span>
+                        )}
+                        {summary.vehicle.mileageBandBreakdown && (
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            {summary.vehicle.mileageBandBreakdown.map((b, i) => (
+                              <span key={i}>{i > 0 ? ' + ' : ''}{b.miles.toLocaleString()} mi × {(b.ratePerMile * 100).toFixed(0)}p</span>
+                            ))}
+                          </p>
+                        )}
+                      </div>
+                      <span className="text-sm font-semibold text-gray-800 tabular-nums">{fmt(summary.vehicle.mileageAllowance)}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Mileage input */}
+                <div className="mt-4 flex items-center gap-2">
+                  <span className="text-xs text-gray-500 whitespace-nowrap">
+                    {summary.vehicle.mileageAllowance === null ? 'Compare vs mileage allowance:' : 'Update mileage:'}
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="e.g. 8,500"
+                    value={milesInput}
+                    onChange={(e) => setMilesInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleApplyMileage()}
+                    className="w-28 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  />
+                  <span className="text-xs text-gray-400">business miles</span>
+                  <button
+                    onClick={handleApplyMileage}
+                    disabled={!milesInput.trim()}
+                    className="px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    Compare
+                  </button>
+                  {summary.vehicle.mileageAllowance !== null && (
+                    <button
+                      onClick={handleClearMileage}
+                      className="text-xs text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex justify-between items-center pt-3 mt-3 border-t border-gray-100">
+                  <span className="text-xs font-semibold text-gray-500">
+                    Vehicle deduction ({summary.vehicle.chosenMethod === 'mileage' ? 'mileage method' : 'actual costs'})
+                  </span>
+                  <span className="text-sm font-bold text-gray-700 tabular-nums">{fmt(summary.vehicle.chosenAmount)}</span>
+                </div>
+              </div>
+
+              {/* Final totals */}
+              <div className="px-6 py-5 bg-gray-50/60 space-y-2.5">
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-gray-500">Non-vehicle expenses</span>
+                  <span className="font-semibold text-gray-700 tabular-nums">{fmt(summary.totalNonVehicleExpenses)}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-gray-500">Vehicle deduction</span>
+                  <span className="font-semibold text-gray-700 tabular-nums">{fmt(summary.vehicle.chosenAmount)}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm pt-1 border-t border-gray-200">
+                  <span className="font-semibold text-gray-700">Total allowable expenses</span>
+                  <span className="font-bold text-red-600 tabular-nums">{fmt(summary.totalAllowableExpenses)}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-gray-500">Turnover</span>
+                  <span className="font-semibold text-emerald-700 tabular-nums">{fmt(summary.turnover)}</span>
+                </div>
+                <div className="flex justify-between items-center pt-2 border-t border-gray-300">
+                  <span className="text-base font-bold text-gray-900">
+                    {summary.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}
+                  </span>
+                  <span className={`text-xl font-bold tabular-nums ${summary.netProfit >= 0 ? 'text-indigo-700' : 'text-red-600'}`}>
+                    {summary.netProfit < 0 ? '−' : ''}{fmt(summary.netProfit)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-400 text-center pb-4">
+              Tax year {summary.taxYear} · 6 April – 5 April · approved transactions only
+              {summary.flaggedTransactionCount > 0 && (
+                <> · <span className="text-amber-500">{summary.flaggedTransactionCount} flagged transaction{summary.flaggedTransactionCount !== 1 ? 's' : ''} excluded</span></>
+              )}
+            </p>
+          </>
+        )}
+      </div>
+    </>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -1886,6 +2203,19 @@ export default function DashboardPage() {
           <ClientDetailView
             client={viewingClient}
             onBack={() => setCurrentView('clients')}
+          />
+        )}
+
+        {/* ── Tax summary view ── */}
+        {currentView === 'tax' && (
+          <TaxView
+            selectedClient={selectedClient}
+            allClients={allClients}
+            onSelectClient={(c) => {
+              setSelectedClient(c)
+              setTransactions([])
+              setMerchantMemory(new Map())
+            }}
           />
         )}
 

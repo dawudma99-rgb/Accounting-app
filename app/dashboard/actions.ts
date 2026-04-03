@@ -10,6 +10,9 @@ import type {
   Transaction,
   TransactionCategory,
 } from '@/types/transaction'
+import { calculateTaxSummary } from '@/services/tax/calculator'
+import { getTaxYearConfig, DEFAULT_TAX_YEAR } from '@/config/taxYears'
+import type { TaxSummary } from '@/types/tax'
 
 // ─── Client types ─────────────────────────────────────────────────────────────
 
@@ -269,4 +272,54 @@ export async function loadConfirmedRules(
     pattern:  r.pattern,
     category: r.category as TransactionCategory,
   }))
+}
+
+// ─── Tax Summary ──────────────────────────────────────────────────────────────
+
+/**
+ * Fetch all transactions saved for a client, filter to the given tax year's
+ * date range, split into approved vs flagged, then run the pure calculator.
+ *
+ * Only 'auto_approved' and 'reviewed' transactions contribute to the figures.
+ * Flagged transactions are counted and surfaced in the result so the UI can
+ * warn the accountant that the totals may be incomplete.
+ */
+export async function getTaxSummary(
+  clientId: string,
+  taxYear:  string = DEFAULT_TAX_YEAR,
+  businessMiles?: number,
+): Promise<TaxSummary> {
+  const config = getTaxYearConfig(taxYear)
+
+  const { data, error } = await supabaseServer
+    .from('transactions')
+    .select('date, amount, category, status')
+    .eq('client_id', clientId)
+
+  if (error) throw new Error(error.message)
+
+  const all = data ?? []
+
+  // Filter to the tax year's 6 Apr – 5 Apr window
+  const inYear = all.filter(
+    (t) => t.date >= config.startDate && t.date <= config.endDate,
+  )
+
+  const approved = inYear.filter(
+    (t) => t.status === 'auto_approved' || t.status === 'reviewed',
+  )
+  const flagged  = inYear.filter((t) => t.status === 'flagged')
+
+  return calculateTaxSummary(
+    approved.map((t) => ({
+      amount:   Number(t.amount),
+      category: t.category as TransactionCategory,
+      date:     t.date,
+    })),
+    config,
+    {
+      businessMiles,
+      flaggedTransactionCount: flagged.length,
+    },
+  )
 }
