@@ -286,8 +286,9 @@ export async function loadConfirmedRules(
  */
 export async function getTaxSummary(
   clientId: string,
-  taxYear:  string = DEFAULT_TAX_YEAR,
+  taxYear:      string = DEFAULT_TAX_YEAR,
   businessMiles?: number,
+  otherIncome?:   number,
 ): Promise<TaxSummary> {
   const config = getTaxYearConfig(taxYear)
 
@@ -305,6 +306,10 @@ export async function getTaxSummary(
     (t) => t.date >= config.startDate && t.date <= config.endDate,
   )
 
+  const outOfRange = all.filter(
+    (t) => t.date < config.startDate || t.date > config.endDate,
+  )
+
   const approved = inYear.filter(
     (t) => t.status === 'auto_approved' || t.status === 'reviewed',
   )
@@ -319,7 +324,9 @@ export async function getTaxSummary(
     config,
     {
       businessMiles,
-      flaggedTransactionCount: flagged.length,
+      otherIncome,
+      flaggedTransactionCount:    flagged.length,
+      outOfRangeTransactionCount: outOfRange.length,
     },
   )
 }

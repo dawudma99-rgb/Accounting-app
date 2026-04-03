@@ -1423,23 +1423,25 @@ function TaxView({
   allClients:      ClientRecord[]
   onSelectClient:  (c: ClientRecord | null) => void
 }) {
-  const availableYears                          = getAvailableTaxYears()
-  const [taxYear,       setTaxYear]             = useState(DEFAULT_TAX_YEAR)
-  const [milesInput,    setMilesInput]           = useState('')
-  const [appliedMiles,  setAppliedMiles]         = useState<number | undefined>(undefined)
-  const [summary,       setSummary]              = useState<TaxSummary | null>(null)
-  const [loading,       setLoading]              = useState(false)
-  const [error,         setError]                = useState<string | null>(null)
+  const availableYears                                    = getAvailableTaxYears()
+  const [taxYear,            setTaxYear]                  = useState(DEFAULT_TAX_YEAR)
+  const [milesInput,         setMilesInput]               = useState('')
+  const [appliedMiles,       setAppliedMiles]             = useState<number | undefined>(undefined)
+  const [otherIncomeInput,   setOtherIncomeInput]         = useState('')
+  const [appliedOtherIncome, setAppliedOtherIncome]       = useState<number | undefined>(undefined)
+  const [summary,            setSummary]                  = useState<TaxSummary | null>(null)
+  const [loading,            setLoading]                  = useState(false)
+  const [error,              setError]                    = useState<string | null>(null)
 
   useEffect(() => {
     if (!selectedClient) { setSummary(null); return }
     setLoading(true)
     setError(null)
-    getTaxSummary(selectedClient.id, taxYear, appliedMiles)
+    getTaxSummary(selectedClient.id, taxYear, appliedMiles, appliedOtherIncome)
       .then(setSummary)
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [selectedClient?.id, taxYear, appliedMiles]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedClient?.id, taxYear, appliedMiles, appliedOtherIncome]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleApplyMileage() {
     const miles = Number(milesInput.replace(/,/g, ''))
@@ -1450,6 +1452,24 @@ function TaxView({
   function handleClearMileage() {
     setMilesInput('')
     setAppliedMiles(undefined)
+  }
+
+  function handleApplyOtherIncome() {
+    const amount = Number(otherIncomeInput.replace(/,/g, '').replace(/£/g, ''))
+    if (!Number.isFinite(amount) || amount < 0) return
+    setAppliedOtherIncome(amount === 0 ? undefined : amount)
+  }
+
+  function handleClearOtherIncome() {
+    setOtherIncomeInput('')
+    setAppliedOtherIncome(undefined)
+  }
+
+  function formatDate(iso: string): string {
+    const [year, month, day] = iso.split('-').map(Number)
+    const months = ['January','February','March','April','May','June','July',
+                    'August','September','October','November','December']
+    return `${day} ${months[month - 1]} ${year}`
   }
 
   function fmt(n: number): string {
@@ -1491,14 +1511,24 @@ function TaxView({
           </select>
         </div>
 
-        {summary && summary.flaggedTransactionCount > 0 && (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg">
-            <AlertIcon className="w-4 h-4 text-amber-500 flex-none" />
-            <span className="text-xs text-amber-700 font-medium">
-              {summary.flaggedTransactionCount} flagged transaction{summary.flaggedTransactionCount !== 1 ? 's' : ''} excluded — resolve in Dashboard first
-            </span>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {summary && summary.outOfRangeTransactionCount > 0 && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg">
+              <AlertIcon className="w-4 h-4 text-blue-400 flex-none" />
+              <span className="text-xs text-blue-700 font-medium">
+                {summary.outOfRangeTransactionCount} transaction{summary.outOfRangeTransactionCount !== 1 ? 's' : ''} outside {taxYear} excluded — check tax year selection
+              </span>
+            </div>
+          )}
+          {summary && summary.flaggedTransactionCount > 0 && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg">
+              <AlertIcon className="w-4 h-4 text-amber-500 flex-none" />
+              <span className="text-xs text-amber-700 font-medium">
+                {summary.flaggedTransactionCount} flagged transaction{summary.flaggedTransactionCount !== 1 ? 's' : ''} excluded — resolve in Dashboard first
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="px-8 py-6 space-y-5 max-w-4xl">
@@ -1700,6 +1730,197 @@ function TaxView({
                   </span>
                 </div>
               </div>
+            </div>
+
+            {/* ── Tax Liability ── */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-900">Tax Liability Estimate</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">Income tax + Class 4 NI · {summary.taxYear}</p>
+                </div>
+                {/* Other income input */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500 whitespace-nowrap">Other annual income:</span>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">£</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="0"
+                      value={otherIncomeInput}
+                      onChange={(e) => setOtherIncomeInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleApplyOtherIncome()}
+                      className="w-28 pl-6 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    />
+                  </div>
+                  <button
+                    onClick={handleApplyOtherIncome}
+                    disabled={!otherIncomeInput.trim()}
+                    className="px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    Recalculate
+                  </button>
+                  {appliedOtherIncome !== undefined && (
+                    <button onClick={handleClearOtherIncome} className="text-xs text-gray-400 hover:text-gray-600 transition-colors cursor-pointer">
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {summary.liability.netProfit <= 0 ? (
+                <div className="px-6 py-8 text-center">
+                  <p className="text-sm text-gray-500">No tax liability — net profit is zero or a loss.</p>
+                </div>
+              ) : (
+                <>
+                  {/* Income basis */}
+                  <div className="px-6 py-4 border-b border-gray-100">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Income basis</p>
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Self-employment profit</span>
+                        <span className="font-semibold text-gray-800 tabular-nums">{fmt(summary.liability.netProfit)}</span>
+                      </div>
+                      {summary.liability.otherIncome > 0 && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Other income</span>
+                          <span className="font-semibold text-gray-800 tabular-nums">{fmt(summary.liability.otherIncome)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-500">Personal allowance</span>
+                        <span className="text-gray-500 tabular-nums">({fmt(summary.liability.effectivePersonalAllowance)})</span>
+                      </div>
+                      {summary.liability.effectivePersonalAllowance < summary.liability.personalAllowance && (
+                        <p className="text-xs text-amber-600">Personal allowance tapered — income exceeds £100,000</p>
+                      )}
+                      <div className="flex justify-between text-sm pt-1 border-t border-gray-100">
+                        <span className="font-semibold text-gray-700">Taxable income</span>
+                        <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.taxableIncome)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Income tax */}
+                  <div className="px-6 py-4 border-b border-gray-100">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Income Tax</p>
+                    <div className="space-y-1.5">
+                      {summary.liability.incomeTaxBands.map((band) => (
+                        <div key={band.label} className="flex justify-between items-center text-sm">
+                          <div className="flex items-center gap-2">
+                            <span className="text-gray-600">{band.label}</span>
+                            <span className="text-xs text-gray-400">on {fmt(band.taxableAmount)}</span>
+                          </div>
+                          <span className="font-semibold text-gray-800 tabular-nums">{fmt(band.taxDue)}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between text-sm pt-1 border-t border-gray-100">
+                        <span className="font-semibold text-gray-700">Income tax subtotal</span>
+                        <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.totalIncomeTax)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* National Insurance */}
+                  <div className="px-6 py-4 border-b border-gray-100">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">National Insurance</p>
+                    <div className="space-y-1.5">
+                      {summary.liability.niClass4Lower > 0 && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Class 4 (6%) — profits £12,570–£50,270</span>
+                          <span className="font-semibold text-gray-800 tabular-nums">{fmt(summary.liability.niClass4Lower)}</span>
+                        </div>
+                      )}
+                      {summary.liability.niClass4Upper > 0 && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Class 4 (2%) — profits above £50,270</span>
+                          <span className="font-semibold text-gray-800 tabular-nums">{fmt(summary.liability.niClass4Upper)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between text-sm">
+                        <div>
+                          <span className="text-gray-600">Class 2</span>
+                          {summary.liability.niClass2Secured ? (
+                            <span className="ml-2 text-xs text-emerald-600">State pension credit secured ✓</span>
+                          ) : (
+                            <span className="ml-2 text-xs text-amber-600">Below threshold — voluntary payment may apply</span>
+                          )}
+                        </div>
+                        <span className="text-xs text-gray-400 tabular-nums">
+                          {summary.liability.niClass2Secured
+                            ? `£${summary.liability.niClass2Annual.toFixed(2)} voluntary`
+                            : '—'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-sm pt-1 border-t border-gray-100">
+                        <span className="font-semibold text-gray-700">NI subtotal</span>
+                        <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.totalNiClass4)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Total liability */}
+                  <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/60">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-bold text-gray-900">Total estimated tax liability</span>
+                      <span className="text-xl font-bold text-red-600 tabular-nums">{fmt(summary.liability.totalLiability)}</span>
+                    </div>
+                  </div>
+
+                  {/* Payment schedule */}
+                  <div className="px-6 py-4 border-b border-gray-100">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Payment Schedule</p>
+                    {summary.liability.requiresPaymentOnAccount ? (
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-start text-sm">
+                          <div>
+                            <span className="text-gray-700 font-medium">{formatDate(summary.liability.januaryDate)}</span>
+                            <p className="text-xs text-gray-400 mt-0.5">Filing deadline + 1st payment on account</p>
+                          </div>
+                          <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.januaryPayment)}</span>
+                        </div>
+                        <div className="flex justify-between items-start text-sm">
+                          <div>
+                            <span className="text-gray-700 font-medium">{formatDate(summary.liability.julyDate)}</span>
+                            <p className="text-xs text-gray-400 mt-0.5">2nd payment on account</p>
+                          </div>
+                          <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.julyPayment)}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex justify-between items-start text-sm">
+                        <div>
+                          <span className="text-gray-700 font-medium">{formatDate(summary.liability.januaryDate)}</span>
+                          <p className="text-xs text-gray-400 mt-0.5">Full amount due — no payment on account required (liability below £1,000)</p>
+                        </div>
+                        <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.januaryPayment)}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Take-home */}
+                  <div className="px-6 py-4 bg-gray-50/60">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-xs text-gray-500 font-medium mb-1">After-tax take-home</p>
+                        <p className={`text-xl font-bold tabular-nums ${summary.liability.afterTaxProfit >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                          {summary.liability.afterTaxProfit < 0 ? '−' : ''}{fmt(summary.liability.afterTaxProfit)}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-0.5">Self-employment profit after tax and NI</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500 font-medium mb-1">Effective tax rate</p>
+                        <p className="text-xl font-bold text-gray-800 tabular-nums">
+                          {summary.liability.effectiveTaxRate.toFixed(1)}%
+                        </p>
+                        <p className="text-xs text-gray-400 mt-0.5">Of net self-employment profit</p>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
             <p className="text-xs text-gray-400 text-center pb-4">

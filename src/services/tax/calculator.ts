@@ -1,6 +1,9 @@
 import type {
   ApprovedTransaction,
+  IncomeTaxBand,
   MileageBandUsage,
+  TaxBandResult,
+  TaxLiability,
   TaxSummary,
   TaxYearConfig,
   VehicleDeduction,
@@ -10,13 +13,6 @@ import { SA103_EXPENSE_CONFIG } from './sa103'
 
 // ─── Mileage helpers ──────────────────────────────────────────────────────────
 
-/**
- * Walk the configured mileage bands and return the total allowance for the
- * given number of business miles.
- *
- * Bands are consumed in order. Each band has a width (bandSizeMiles); the
- * final band (bandSizeMiles === null) absorbs all remaining miles.
- */
 function buildMileageBandBreakdown(
   miles: number,
   config: TaxYearConfig,
@@ -26,29 +22,20 @@ function buildMileageBandBreakdown(
 
   for (const band of config.mileageRates) {
     if (remaining <= 0) break
-
     const milesInBand =
       band.bandSizeMiles !== null
         ? Math.min(remaining, band.bandSizeMiles)
         : remaining
-
     breakdown.push({
       miles:       milesInBand,
       ratePerMile: band.ratePerMile,
       amount:      milesInBand * band.ratePerMile,
     })
-
     remaining -= milesInBand
   }
 
   return breakdown
 }
-
-function sumMileageBreakdown(breakdown: MileageBandUsage[]): number {
-  return breakdown.reduce((total, b) => total + b.amount, 0)
-}
-
-// ─── Vehicle deduction resolver ───────────────────────────────────────────────
 
 function resolveVehicleDeduction(
   actualCosts: number,
@@ -67,9 +54,9 @@ function resolveVehicleDeduction(
     }
   }
 
-  const breakdown      = buildMileageBandBreakdown(businessMiles, config)
-  const mileageTotal   = sumMileageBreakdown(breakdown)
-  const useMileage     = mileageTotal > actualCosts
+  const breakdown    = buildMileageBandBreakdown(businessMiles, config)
+  const mileageTotal = breakdown.reduce((sum, b) => sum + b.amount, 0)
+  const useMileage   = mileageTotal > actualCosts
 
   return {
     actualCosts,
@@ -82,28 +69,152 @@ function resolveVehicleDeduction(
   }
 }
 
+// ─── Income tax helpers ───────────────────────────────────────────────────────
+
+/**
+ * Apply the personal allowance taper for incomes above the threshold.
+ * Allowance reduces by £1 for every £2 of income above the threshold,
+ * down to a minimum of £0.
+ */
+function effectivePersonalAllowance(
+  totalIncome: number,
+  config: TaxYearConfig,
+): number {
+  const { personalAllowance, taperThreshold } = config.incomeTax
+  if (totalIncome <= taperThreshold) return personalAllowance
+  const reduction = Math.floor((totalIncome - taperThreshold) / 2)
+  return Math.max(0, personalAllowance - reduction)
+}
+
+/**
+ * Walk the income tax bands and compute the tax due on the given amount
+ * of taxable income (i.e. income already reduced by personal allowance).
+ */
+function applyIncomeTaxBands(
+  taxableIncome: number,
+  bands: IncomeTaxBand[],
+): TaxBandResult[] {
+  return bands
+    .map((band) => {
+      const upper         = band.to ?? Infinity
+      const taxableInBand = Math.max(0, Math.min(taxableIncome, upper) - band.from)
+      return {
+        label:         band.label,
+        rate:          band.rate,
+        taxableAmount: taxableInBand,
+        taxDue:        taxableInBand * band.rate,
+      }
+    })
+    .filter((b) => b.taxableAmount > 0)
+}
+
+// ─── NI Class 4 helper ────────────────────────────────────────────────────────
+
+function calculateNiClass4(
+  profit: number,
+  config: TaxYearConfig,
+): { lower: number; upper: number } {
+  const { lowerProfitsLimit, upperProfitsLimit, lowerRate, upperRate } =
+    config.nationalInsurance.class4
+
+  const lower = Math.max(0, Math.min(profit, upperProfitsLimit) - lowerProfitsLimit) * lowerRate
+  const upper = Math.max(0, profit - upperProfitsLimit) * upperRate
+
+  return { lower: Math.max(0, lower), upper: Math.max(0, upper) }
+}
+
+// ─── Tax liability calculator ─────────────────────────────────────────────────
+
+function calculateTaxLiability(
+  netProfit: number,
+  config: TaxYearConfig,
+  otherIncome: number,
+): TaxLiability {
+  const totalIncome        = netProfit + otherIncome
+  const personalAllowance  = config.incomeTax.personalAllowance
+  const effectivePA        = effectivePersonalAllowance(totalIncome, config)
+  const taxableIncome      = Math.max(0, totalIncome - effectivePA)
+
+  const incomeTaxBands     = applyIncomeTaxBands(taxableIncome, config.incomeTax.bands)
+  const totalIncomeTax     = incomeTaxBands.reduce((sum, b) => sum + b.taxDue, 0)
+
+  const { lower: niClass4Lower, upper: niClass4Upper } =
+    calculateNiClass4(netProfit, config)
+  const totalNiClass4 = niClass4Lower + niClass4Upper
+
+  const { class2 }      = config.nationalInsurance
+  const niClass2Secured = netProfit >= class2.smallProfitsThreshold
+  const niClass2Annual  = class2.weeklyRate * class2.weeksInYear
+
+  // Class 2 is not included in the cash liability — it has not been a
+  // mandatory payment since April 2024. It is shown in the UI as informational.
+  const totalLiability = totalIncomeTax + totalNiClass4
+
+  const { onAccountThreshold, januaryDate, julyDate } = config.payments
+  const requiresPaymentOnAccount = totalLiability > onAccountThreshold
+  const januaryPayment = requiresPaymentOnAccount
+    ? totalLiability / 2
+    : totalLiability
+  const julyPayment = requiresPaymentOnAccount
+    ? totalLiability / 2
+    : 0
+
+  const afterTaxProfit   = netProfit - totalLiability
+  const effectiveTaxRate = netProfit > 0 ? (totalLiability / netProfit) * 100 : 0
+
+  return {
+    netProfit,
+    otherIncome,
+    totalIncome,
+    personalAllowance,
+    effectivePersonalAllowance: effectivePA,
+    taxableIncome,
+    incomeTaxBands,
+    totalIncomeTax,
+    niClass4Lower,
+    niClass4Upper,
+    totalNiClass4,
+    niClass2Secured,
+    niClass2Annual,
+    totalLiability,
+    requiresPaymentOnAccount,
+    januaryPayment,
+    julyPayment,
+    januaryDate,
+    julyDate,
+    afterTaxProfit,
+    effectiveTaxRate,
+  }
+}
+
 // ─── Main calculator ──────────────────────────────────────────────────────────
 
 export interface CalculatorOptions {
   businessMiles?: number
-  /** Number of flagged transactions excluded by the caller — stored for display only */
+  otherIncome?: number
   flaggedTransactionCount?: number
+  outOfRangeTransactionCount?: number
 }
 
 /**
- * Pure function. Takes an array of approved transactions and returns a fully
- * computed TaxSummary. No I/O, no side effects.
+ * Pure function. No I/O, no side effects.
  *
- * @param transactions  Approved transactions filtered to the correct tax year.
- * @param config        Tax year config from src/config/taxYears.ts.
- * @param options       Optional mileage figure and flagged count metadata.
+ * Takes an array of approved transactions already filtered to the correct
+ * tax year, plus the year config and optional inputs (mileage, other income).
+ * Returns a fully computed TaxSummary including profit figures and full
+ * income tax + NI liability.
  */
 export function calculateTaxSummary(
   transactions: ApprovedTransaction[],
   config: TaxYearConfig,
   options: CalculatorOptions = {},
 ): TaxSummary {
-  const { businessMiles, flaggedTransactionCount = 0 } = options
+  const {
+    businessMiles,
+    otherIncome             = 0,
+    flaggedTransactionCount  = 0,
+    outOfRangeTransactionCount = 0,
+  } = options
 
   // ── Turnover ──────────────────────────────────────────────────────────────
   const incomeRows = transactions.filter((t) => t.amount > 0)
@@ -137,7 +248,7 @@ export function calculateTaxSummary(
         count:    totals.count,
       }]
     })
-    .sort((a, b) => b.amount - a.amount) // largest first
+    .sort((a, b) => b.amount - a.amount)
 
   const totalNonVehicleExpenses = nonVehicleExpenses.reduce((sum, e) => sum + e.amount, 0)
 
@@ -148,9 +259,12 @@ export function calculateTaxSummary(
     config,
   )
 
-  // ── Final totals ──────────────────────────────────────────────────────────
+  // ── Profit ────────────────────────────────────────────────────────────────
   const totalAllowableExpenses = totalNonVehicleExpenses + vehicle.chosenAmount
   const netProfit              = turnover - totalAllowableExpenses
+
+  // ── Tax liability ─────────────────────────────────────────────────────────
+  const liability = calculateTaxLiability(netProfit, config, otherIncome)
 
   return {
     taxYear: config.year,
@@ -166,7 +280,10 @@ export function calculateTaxSummary(
     totalAllowableExpenses,
     netProfit,
 
-    approvedTransactionCount: transactions.length,
+    liability,
+
+    approvedTransactionCount:   transactions.length,
     flaggedTransactionCount,
+    outOfRangeTransactionCount,
   }
 }
