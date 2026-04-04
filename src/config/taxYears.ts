@@ -61,6 +61,10 @@ const TAX_YEARS: Record<string, TaxYearConfig> = {
       // Payments on account are only required if the SA liability exceeds £1,000
       onAccountThreshold: 1_000,
     },
+
+    // Turnover at or below this figure allows use of SA103S (short form).
+    // Aligned to the VAT registration threshold for 2025/26.
+    sa103sThreshold: 90_000,
   },
 }
 

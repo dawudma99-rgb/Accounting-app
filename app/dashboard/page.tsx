@@ -25,8 +25,10 @@ import {
   saveRunTransactions,
 } from './actions'
 import type { ClientRecord, SavedTransaction } from './actions'
-import { DEFAULT_TAX_YEAR, getAvailableTaxYears } from '@/config/taxYears'
+import { DEFAULT_TAX_YEAR, getAvailableTaxYears, getTaxYearConfig } from '@/config/taxYears'
 import type { TaxSummary } from '@/types/tax'
+import { buildSA103Draft } from '@/services/tax/sa103Draft'
+import type { SA103Draft } from '@/types/sa103'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1922,6 +1924,155 @@ function TaxView({
                 </>
               )}
             </div>
+
+            {/* ── SA103 Draft ── */}
+            {(() => {
+              if (!selectedClient) return null
+              const draft: SA103Draft = buildSA103Draft(
+                summary,
+                selectedClient,
+                getTaxYearConfig(taxYear),
+              )
+
+              const flagColors: Record<string, string> = {
+                action:  'bg-red-50 border-red-200 text-red-700',
+                warning: 'bg-amber-50 border-amber-200 text-amber-700',
+                info:    'bg-blue-50 border-blue-200 text-blue-700',
+              }
+              const flagIcons: Record<string, string> = {
+                action: '⚠', warning: '⚠', info: 'ℹ',
+              }
+
+              return (
+                <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+                  {/* Header */}
+                  <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-sm font-semibold text-gray-900">SA103 Draft Summary</h2>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-bold tracking-wide ${
+                          draft.hasBlockingFlags
+                            ? 'bg-red-100 text-red-600'
+                            : 'bg-amber-100 text-amber-600'
+                        }`}>DRAFT</span>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                          {draft.formVersion}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {draft.clientName}
+                        {draft.utr ? ` · UTR: ${draft.utr}` : ' · UTR not recorded'}
+                        {' · '}{draft.businessDescription}
+                        {' · '}Generated {draft.generatedDate}
+                      </p>
+                    </div>
+                    {draft.hasBlockingFlags && (
+                      <span className="text-xs font-medium text-red-600">
+                        Action required before filing
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Business income */}
+                  <div className="px-6 py-4 border-b border-gray-100">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Business Income</p>
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Turnover from self-employment</span>
+                        <span className="font-semibold text-gray-800 tabular-nums">{fmt(draft.turnover)}</span>
+                      </div>
+                      {draft.otherBusinessIncome > 0 && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Other business income</span>
+                          <span className="font-semibold text-gray-800 tabular-nums">{fmt(draft.otherBusinessIncome)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between text-sm pt-1 border-t border-gray-100">
+                        <span className="font-semibold text-gray-700">Total business income</span>
+                        <span className="font-bold text-emerald-700 tabular-nums">{fmt(draft.totalBusinessIncome)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Allowable expenses */}
+                  <div className="px-6 py-4 border-b border-gray-100">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
+                      Allowable Expenses
+                      {draft.formVersion === 'SA103S' && (
+                        <span className="ml-2 normal-case font-normal text-gray-400">
+                          (SA103S — shown in detail for review, filed as total)
+                        </span>
+                      )}
+                    </p>
+                    <div className="space-y-1.5">
+                      {draft.expenseLines.map((line) => (
+                        <div key={line.hmrcLabel} className="flex justify-between text-sm">
+                          <span className="text-gray-600">{line.hmrcLabel}</span>
+                          <span className="font-semibold text-gray-800 tabular-nums">{fmt(line.amount)}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between text-sm">
+                        <div>
+                          <span className="text-gray-600">{draft.vehicleLine.hmrcLabel}</span>
+                          <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                            draft.vehicleLine.method === 'mileage'
+                              ? 'bg-indigo-50 text-indigo-600'
+                              : 'bg-gray-100 text-gray-500'
+                          }`}>
+                            {draft.vehicleLine.method === 'mileage' ? 'mileage method' : 'actual costs'}
+                          </span>
+                        </div>
+                        <span className="font-semibold text-gray-800 tabular-nums">{fmt(draft.vehicleLine.amount)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm pt-1 border-t border-gray-100">
+                        <span className="font-semibold text-gray-700">Total allowable expenses</span>
+                        <span className="font-bold text-red-600 tabular-nums">{fmt(draft.totalAllowableExpenses)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Profit */}
+                  <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/40">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Profit / Loss</p>
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-700 font-medium">
+                          {draft.isLoss ? 'Net loss' : 'Net profit'}
+                        </span>
+                        <span className={`font-bold text-lg tabular-nums ${draft.isLoss ? 'text-red-600' : 'text-indigo-700'}`}>
+                          {draft.isLoss ? '−' : ''}{fmt(draft.netProfit)}
+                        </span>
+                      </div>
+                      {!draft.isLoss && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-500">Taxable profit carried to SA100</span>
+                          <span className="font-semibold text-gray-700 tabular-nums">{fmt(draft.taxableProfitForSA100)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Accountant flags */}
+                  <div className="px-6 py-4">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Accountant Notes</p>
+                    <div className="space-y-2">
+                      {draft.flags.map((flag, i) => (
+                        <div
+                          key={i}
+                          className={`flex items-start gap-2.5 px-3 py-2.5 rounded-lg border text-xs ${flagColors[flag.severity]}`}
+                        >
+                          <span className="flex-none font-bold mt-0.5">{flagIcons[flag.severity]}</span>
+                          <div>
+                            <span className="font-semibold">{flag.label}: </span>
+                            {flag.message}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
 
             <p className="text-xs text-gray-400 text-center pb-4">
               Tax year {summary.taxYear} · 6 April – 5 April · approved transactions only

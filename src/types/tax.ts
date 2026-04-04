@@ -85,6 +85,11 @@ export interface TaxYearConfig {
   incomeTax: IncomeTaxConfig
   nationalInsurance: NiConfig
   payments: PaymentConfig
+  /**
+   * Turnover at or below which SA103S (short form) may be used.
+   * Tied to the VAT registration threshold for the year.
+   */
+  sa103sThreshold: number
 }
 
 // ─── Calculator Inputs ────────────────────────────────────────────────────────
