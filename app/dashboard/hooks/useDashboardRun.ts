@@ -15,23 +15,23 @@ import {
   confirmTransaction,
   loadConfirmedRules,
   ocrReceipts,
-  processTransactions,
   saveRunTransactions,
 } from '../actions'
-import type { ClientRecord } from '../actions'
+import type { ClientRecord, ProcessedRow } from '../actions'
 import type { DashboardTransaction, MerchantMemory, MatchSource } from '../types'
 import { applyMemory } from '../helpers'
 
 export interface DashboardRunState {
-  transactions:      DashboardTransaction[]
-  isProcessing:      boolean
-  merchantMemory:    MerchantMemory
-  error:             string | null
-  parseWarnings:     string[]
-  unmatchedPayouts:  UnmatchedPayout[]
-  unmatchedReceipts: UnmatchedReceipt[]
-  isBulkSaving:      boolean
-  businessType:      BusinessType
+  transactions:        DashboardTransaction[]
+  isProcessing:        boolean
+  processingProgress:  { done: number; total: number } | null
+  merchantMemory:      MerchantMemory
+  error:               string | null
+  parseWarnings:       string[]
+  unmatchedPayouts:    UnmatchedPayout[]
+  unmatchedReceipts:   UnmatchedReceipt[]
+  isBulkSaving:        boolean
+  businessType:        BusinessType
 }
 
 export interface DashboardRunActions {
@@ -45,14 +45,15 @@ export interface DashboardRunActions {
 export function useDashboardRun(
   selectedClient: ClientRecord | null,
 ): DashboardRunState & DashboardRunActions {
-  const [transactions,      setTransactions]      = useState<DashboardTransaction[]>([])
-  const [isProcessing,      setIsProcessing]      = useState(false)
-  const [merchantMemory,    setMerchantMemory]    = useState<MerchantMemory>(new Map())
-  const [error,             setError]             = useState<string | null>(null)
-  const [parseWarnings,     setParseWarnings]     = useState<string[]>([])
-  const [unmatchedPayouts,  setUnmatchedPayouts]  = useState<UnmatchedPayout[]>([])
-  const [unmatchedReceipts, setUnmatchedReceipts] = useState<UnmatchedReceipt[]>([])
-  const [isBulkSaving,      setIsBulkSaving]      = useState(false)
+  const [transactions,        setTransactions]        = useState<DashboardTransaction[]>([])
+  const [isProcessing,        setIsProcessing]        = useState(false)
+  const [processingProgress,  setProcessingProgress]  = useState<{ done: number; total: number } | null>(null)
+  const [merchantMemory,      setMerchantMemory]      = useState<MerchantMemory>(new Map())
+  const [error,               setError]               = useState<string | null>(null)
+  const [parseWarnings,       setParseWarnings]       = useState<string[]>([])
+  const [unmatchedPayouts,    setUnmatchedPayouts]    = useState<UnmatchedPayout[]>([])
+  const [unmatchedReceipts,   setUnmatchedReceipts]   = useState<UnmatchedReceipt[]>([])
+  const [isBulkSaving,        setIsBulkSaving]        = useState(false)
 
   const businessType: BusinessType = selectedClient?.business_type ?? 'taxi'
 
@@ -93,8 +94,10 @@ export function useDashboardRun(
     setUnmatchedReceipts([])
 
     try {
-      // 1. Parse all bank CSVs and concatenate
+      // 1. Parse ALL files first — fail fast before any AI tokens are spent
+
       const allWarnings: string[] = []
+
       const parsed: Transaction[] = []
       for (const file of bankFiles) {
         const text = await file.text()
@@ -102,24 +105,58 @@ export function useDashboardRun(
         parsed.push(...transactions)
         allWarnings.push(...warnings)
       }
+
+      const allUberRows: UberWeeklyRow[] = []
+      for (const file of platformFiles) {
+        const text = await file.text()
+        const { rows: uberRows, warnings: uberWarnings } = parseUberCSV(text)
+        allUberRows.push(...uberRows)
+        allWarnings.push(...uberWarnings)
+      }
+
       if (allWarnings.length > 0) setParseWarnings(allWarnings)
 
-      // 2. Categorise
-      const rows = await processTransactions(parsed, businessType)
+      // 2. Categorise — single streaming request; server pushes each result as NDJSON
+      setProcessingProgress({ done: 0, total: parsed.length })
+      const rows: ProcessedRow[] = []
 
-      // 3. Platform matching — parse all platform CSVs and concatenate
+      const catResponse = await fetch('/api/categorise', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactions: parsed, businessType }),
+      })
+
+      if (!catResponse.ok || !catResponse.body) {
+        throw new Error(`Categorisation request failed (${catResponse.status})`)
+      }
+
+      const reader  = catResponse.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer    = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          const parsed2 = JSON.parse(line) as ProcessedRow & { __error?: string }
+          if (parsed2.__error) throw new Error(parsed2.__error)
+          rows.push(parsed2)
+          setProcessingProgress({ done: rows.length, total: parsed.length })
+        }
+      }
+
+      // 3. Platform matching — allUberRows already parsed above
       type MatchInfo = { matchSource: 'platform' | 'unmatched'; matchedRow?: UberWeeklyRow }
       const matchMap = new Map<number, MatchInfo>()
       let newUnmatched: UnmatchedPayout[] = []
 
-      if (platformFiles.length > 0) {
-        const allUberRows: UberWeeklyRow[] = []
-        for (const file of platformFiles) {
-          const text = await file.text()
-          const { rows: uberRows, warnings: uberWarnings } = parseUberCSV(text)
-          allUberRows.push(...uberRows)
-          if (uberWarnings.length > 0) setParseWarnings((w) => [...w, ...uberWarnings])
-        }
+      if (allUberRows.length > 0) {
         const { transactions: annotated, unmatchedPayouts: unmatched } =
           matchPlatformPayouts(allUberRows, parsed)
         newUnmatched = unmatched
@@ -253,6 +290,7 @@ export function useDashboardRun(
       setError((err as Error).message)
     } finally {
       setIsProcessing(false)
+      setProcessingProgress(null)
     }
   }
 
@@ -348,6 +386,7 @@ export function useDashboardRun(
   return {
     transactions,
     isProcessing,
+    processingProgress,
     merchantMemory,
     error,
     parseWarnings,

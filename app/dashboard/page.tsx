@@ -127,7 +127,7 @@ export default function DashboardPage() {
             <div className="px-8 py-6 space-y-5 max-w-7xl">
               <UploadPanel
                 onProcess={() => run.handleProcess(bankFiles, platformFiles, receiptFiles)}
-                isProcessing={run.isProcessing}
+                processingProgress={run.processingProgress}
                 bankStatements={bankFiles}
                 onBankStatementsChange={setBankFiles}
                 platformStatements={platformFiles}

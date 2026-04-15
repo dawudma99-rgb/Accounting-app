@@ -58,7 +58,7 @@ function UploadZone({
 
 export function UploadPanel({
   onProcess,
-  isProcessing,
+  processingProgress,
   bankStatements,
   onBankStatementsChange,
   platformStatements,
@@ -67,7 +67,7 @@ export function UploadPanel({
   onReceiptsChange,
 }: {
   onProcess: () => void
-  isProcessing: boolean
+  processingProgress: { done: number; total: number } | null
   bankStatements: File[]
   onBankStatementsChange: (files: File[]) => void
   platformStatements: File[]
@@ -104,17 +104,19 @@ export function UploadPanel({
       </div>
       <div className="mt-4 flex items-center justify-between">
         <p className="text-xs text-gray-400">
-          {bankStatements.length > 0
+          {processingProgress !== null
+            ? `Categorising ${processingProgress.done} / ${processingProgress.total}…`
+            : bankStatements.length > 0
             ? 'Ready to process'
             : 'Upload at least one bank statement CSV to continue'}
         </p>
         <button
           onClick={onProcess}
-          disabled={isProcessing || bankStatements.length === 0}
+          disabled={processingProgress !== null || bankStatements.length === 0}
           className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
         >
-          {isProcessing ? (
-            <><SpinnerIcon className="w-4 h-4 animate-spin" /> Processing…</>
+          {processingProgress !== null ? (
+            <><SpinnerIcon className="w-4 h-4 animate-spin" /> {processingProgress.done} / {processingProgress.total}</>
           ) : (
             <>
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
