@@ -35,7 +35,7 @@ export function ClientsView({
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium rounded transition-colors cursor-pointer"
         >
           + New Client
         </button>
@@ -48,20 +48,20 @@ export function ClientsView({
           </div>
         ) : clients.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
+            <div className="w-12 h-12 rounded bg-zinc-100 flex items-center justify-center mb-3">
               <UsersIcon className="w-6 h-6 text-gray-400" />
             </div>
             <p className="text-sm font-medium text-gray-500">No clients yet</p>
             <p className="text-xs text-gray-400 mt-1">Create a client to start processing their transactions</p>
             <button
               onClick={() => setShowCreate(true)}
-              className="mt-4 flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
+              className="mt-4 flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium rounded transition-colors cursor-pointer"
             >
               + New Client
             </button>
           </div>
         ) : (
-          <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+          <div className="bg-white rounded-md border border-gray-200 overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/70">
@@ -77,11 +77,11 @@ export function ClientsView({
                   <tr
                     key={client.id}
                     onClick={() => onViewClient(client)}
-                    className="cursor-pointer hover:bg-gray-50 transition-colors"
+                    className="cursor-pointer hover:bg-zinc-50 transition-colors"
                   >
                     <td className="px-6 py-3.5 font-medium text-gray-900">{client.name}</td>
                     <td className="px-4 py-3.5">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-indigo-50 text-indigo-700">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-medium bg-zinc-100 text-zinc-700">
                         {BUSINESS_TYPE_LABELS[client.business_type]}
                       </span>
                     </td>

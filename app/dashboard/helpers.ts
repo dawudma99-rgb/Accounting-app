@@ -6,13 +6,13 @@ export function formatAmount(amount: number): string {
 }
 
 export function confidenceRowClass(confidence: number): string {
-  if (confidence >= 90) return 'bg-emerald-50 hover:bg-emerald-100'
-  if (confidence >= 70) return 'bg-amber-50 hover:bg-amber-100'
-  return 'bg-red-50 hover:bg-red-100'
+  if (confidence >= 90) return 'bg-white hover:bg-zinc-50'
+  if (confidence >= 70) return 'bg-amber-50 hover:bg-amber-100/70'
+  return 'bg-red-50 hover:bg-red-100/70'
 }
 
 export function confidenceBadgeClass(confidence: number): string {
-  if (confidence >= 90) return 'bg-emerald-100 text-emerald-700'
+  if (confidence >= 90) return 'bg-zinc-100 text-zinc-700'
   if (confidence >= 70) return 'bg-amber-100 text-amber-700'
   return 'bg-red-100 text-red-700'
 }

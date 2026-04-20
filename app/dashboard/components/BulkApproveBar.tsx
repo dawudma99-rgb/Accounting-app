@@ -33,13 +33,13 @@ export function BulkApproveBar({
   ]
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-3.5 flex items-center gap-3 flex-wrap">
+    <div className="bg-white rounded-md border border-gray-200 px-5 py-3.5 flex items-center gap-3 flex-wrap">
       <span className="text-xs font-semibold text-gray-700 flex-none">Bulk approve</span>
 
       <select
         value={confidenceMin}
         onChange={(e) => setConfidenceMin(Number(e.target.value))}
-        className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+        className="text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-400"
       >
         {CONFIDENCE_OPTIONS.map((o) => (
           <option key={o.value} value={o.value}>{o.label}</option>
@@ -49,7 +49,7 @@ export function BulkApproveBar({
       <select
         value={sourceFilter}
         onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)}
-        className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+        className="text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-400"
       >
         {SOURCE_OPTIONS.map((o) => (
           <option key={o.value} value={o.value}>{o.label}</option>
@@ -59,7 +59,7 @@ export function BulkApproveBar({
       <select
         value={categoryFilter}
         onChange={(e) => setCategoryFilter(e.target.value as typeof categoryFilter)}
-        className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+        className="text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-400"
       >
         {categoryOptions.map((o) => (
           <option key={o.value} value={o.value}>{o.label}</option>
@@ -75,7 +75,7 @@ export function BulkApproveBar({
       <button
         onClick={() => onApprove(eligible)}
         disabled={isSaving || eligible.length === 0}
-        className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+        className="flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold rounded transition-colors cursor-pointer"
       >
         {isSaving ? (
           <><SpinnerIcon className="w-3.5 h-3.5 animate-spin" /> Saving…</>

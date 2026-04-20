@@ -137,7 +137,7 @@ export function TaxView({
               const client = allClients.find((c) => c.id === e.target.value) ?? null
               onSelectClient(client)
             }}
-            className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            className="text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-400"
           >
             <option value="">Select client…</option>
             {allClients.map((c) => (
@@ -148,7 +148,7 @@ export function TaxView({
           <select
             value={taxYear}
             onChange={(e) => { setTaxYear(e.target.value); setAppliedMiles(undefined); setMilesInput('') }}
-            className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            className="text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-400"
           >
             {availableYears.map((y) => (
               <option key={y} value={y}>Tax year {y}</option>
@@ -180,7 +180,7 @@ export function TaxView({
 
         {!selectedClient ? (
           <div className="flex flex-col items-center justify-center py-24 text-center">
-            <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
+            <div className="w-12 h-12 rounded bg-zinc-100 flex items-center justify-center mb-3">
               <TaxIcon className="w-6 h-6 text-gray-400" />
             </div>
             <p className="text-sm font-medium text-gray-500">No client selected</p>
@@ -191,7 +191,7 @@ export function TaxView({
             <SpinnerIcon className="w-5 h-5 animate-spin text-gray-400" />
           </div>
         ) : error ? (
-          <div className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+          <div className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
             <AlertIcon className="w-4 h-4 text-red-500 flex-none mt-0.5" />
             <p>{error}</p>
           </div>
@@ -199,30 +199,30 @@ export function TaxView({
           <>
             {/* ── Summary cards ── */}
             <div className="grid grid-cols-3 gap-4">
-              <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+              <div className="bg-white rounded-md border border-gray-200 px-5 py-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  <span className="w-2 h-2 rounded-sm bg-emerald-500" />
                   <p className="text-xs text-gray-500 font-medium">Turnover</p>
                 </div>
-                <p className="text-2xl font-bold tracking-tight text-emerald-700">{fmt(summary.turnover)}</p>
+                <p className="text-xl font-semibold tracking-tight tabular-nums text-emerald-700">{fmt(summary.turnover)}</p>
                 <p className="text-xs text-gray-400 mt-1">{summary.incomeCount} income transaction{summary.incomeCount !== 1 ? 's' : ''}</p>
               </div>
-              <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+              <div className="bg-white rounded-md border border-gray-200 px-5 py-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                  <span className="w-2 h-2 rounded-sm bg-red-500" />
                   <p className="text-xs text-gray-500 font-medium">Total Allowable Expenses</p>
                 </div>
-                <p className="text-2xl font-bold tracking-tight text-red-600">{fmt(summary.totalAllowableExpenses)}</p>
+                <p className="text-xl font-semibold tracking-tight tabular-nums text-red-600">{fmt(summary.totalAllowableExpenses)}</p>
                 <p className="text-xs text-gray-400 mt-1">
                   Vehicle: {summary.vehicle.chosenMethod === 'mileage' ? 'mileage method' : 'actual costs'}
                 </p>
               </div>
-              <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+              <div className="bg-white rounded-md border border-gray-200 px-5 py-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <span className={`w-2 h-2 rounded-full ${summary.netProfit >= 0 ? 'bg-indigo-500' : 'bg-red-400'}`} />
+                  <span className={`w-2 h-2 rounded-sm ${summary.netProfit >= 0 ? 'bg-slate-500' : 'bg-red-400'}`} />
                   <p className="text-xs text-gray-500 font-medium">{summary.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</p>
                 </div>
-                <p className={`text-2xl font-bold tracking-tight ${summary.netProfit >= 0 ? 'text-indigo-700' : 'text-red-600'}`}>
+                <p className={`text-2xl font-bold tracking-tight ${summary.netProfit >= 0 ? 'text-zinc-90000' : 'text-red-600'}`}>
                   {summary.netProfit < 0 ? '−' : ''}{fmt(summary.netProfit)}
                 </p>
                 <p className="text-xs text-gray-400 mt-1">Turnover minus all deductions</p>
@@ -230,7 +230,7 @@ export function TaxView({
             </div>
 
             {/* ── Detailed breakdown ── */}
-            <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+            <div className="bg-white rounded-md border border-gray-200 overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-100">
                 <h2 className="text-sm font-semibold text-gray-900">Expense Breakdown</h2>
                 <p className="text-xs text-gray-400 mt-0.5">Tax year {summary.taxYear} · {summary.approvedTransactionCount} approved transactions</p>
@@ -268,12 +268,12 @@ export function TaxView({
                     <div>
                       <span className="text-sm text-gray-700">Actual fuel / vehicle costs</span>
                       {summary.vehicle.chosenMethod === 'actual' && summary.vehicle.mileageAllowance !== null && (
-                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-600">
+                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 text-zinc-600">
                           ✓ Using this · saves {fmt(summary.vehicle.saving!)}
                         </span>
                       )}
                       {summary.vehicle.chosenMethod === 'actual' && summary.vehicle.mileageAllowance === null && (
-                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-600">
+                        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 text-zinc-600">
                           Using this
                         </span>
                       )}
@@ -288,7 +288,7 @@ export function TaxView({
                           HMRC mileage allowance ({summary.vehicle.businessMiles!.toLocaleString()} miles)
                         </span>
                         {summary.vehicle.chosenMethod === 'mileage' && (
-                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-600">
+                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 text-zinc-600">
                             ✓ Using this · saves {fmt(summary.vehicle.saving!)}
                           </span>
                         )}
@@ -316,13 +316,13 @@ export function TaxView({
                     value={milesInput}
                     onChange={(e) => setMilesInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleApplyMileage()}
-                    className="w-28 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    className="w-28 text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white focus:outline-none focus:ring-1 focus:ring-slate-400"
                   />
                   <span className="text-xs text-gray-400">business miles</span>
                   <button
                     onClick={handleApplyMileage}
                     disabled={!milesInput.trim()}
-                    className="px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
+                    className="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 disabled:bg-zinc-100 disabled:text-zinc-400 text-white rounded transition-colors cursor-pointer disabled:cursor-not-allowed"
                   >
                     Compare
                   </button>
@@ -366,7 +366,7 @@ export function TaxView({
                   <span className="text-base font-bold text-gray-900">
                     {summary.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}
                   </span>
-                  <span className={`text-xl font-bold tabular-nums ${summary.netProfit >= 0 ? 'text-indigo-700' : 'text-red-600'}`}>
+                  <span className={`text-xl font-bold tabular-nums ${summary.netProfit >= 0 ? 'text-zinc-90000' : 'text-red-600'}`}>
                     {summary.netProfit < 0 ? '−' : ''}{fmt(summary.netProfit)}
                   </span>
                 </div>
@@ -374,7 +374,7 @@ export function TaxView({
             </div>
 
             {/* ── Tax Liability ── */}
-            <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+            <div className="bg-white rounded-md border border-gray-200 overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
                 <div>
                   <h2 className="text-sm font-semibold text-gray-900">Tax Liability Estimate</h2>
@@ -391,13 +391,13 @@ export function TaxView({
                       value={otherIncomeInput}
                       onChange={(e) => setOtherIncomeInput(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleApplyOtherIncome()}
-                      className="w-28 pl-6 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                      className="w-28 pl-6 text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white focus:outline-none focus:ring-1 focus:ring-slate-400"
                     />
                   </div>
                   <button
                     onClick={handleApplyOtherIncome}
                     disabled={!otherIncomeInput.trim()}
-                    className="px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
+                    className="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 disabled:bg-zinc-100 disabled:text-zinc-400 text-white rounded transition-colors cursor-pointer disabled:cursor-not-allowed"
                   >
                     Recalculate
                   </button>
@@ -565,7 +565,7 @@ export function TaxView({
 
             {/* ── SA103 Draft ── */}
             {sa103Draft && (
-              <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+              <div className="bg-white rounded-md border border-gray-200 overflow-hidden">
                 <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
                   <div>
                     <div className="flex items-center gap-2">
@@ -634,7 +634,7 @@ export function TaxView({
                         <span className="text-gray-600">{sa103Draft.vehicleLine.hmrcLabel}</span>
                         <span className={`ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
                           sa103Draft.vehicleLine.method === 'mileage'
-                            ? 'bg-indigo-50 text-indigo-600'
+                            ? 'bg-zinc-100 text-zinc-600'
                             : 'bg-gray-100 text-gray-500'
                         }`}>
                           {sa103Draft.vehicleLine.method === 'mileage' ? 'mileage method' : 'actual costs'}
@@ -656,7 +656,7 @@ export function TaxView({
                       <span className="text-gray-700 font-medium">
                         {sa103Draft.isLoss ? 'Net loss' : 'Net profit'}
                       </span>
-                      <span className={`font-bold text-lg tabular-nums ${sa103Draft.isLoss ? 'text-red-600' : 'text-indigo-700'}`}>
+                      <span className={`font-bold text-lg tabular-nums ${sa103Draft.isLoss ? 'text-red-600' : 'text-zinc-90000'}`}>
                         {sa103Draft.isLoss ? '−' : ''}{fmt(sa103Draft.netProfit)}
                       </span>
                     </div>
@@ -691,7 +691,7 @@ export function TaxView({
 
             {/* ── SA100 Final Filing Preview ── */}
             {sa100Preview && (
-              <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+              <div className="bg-white rounded-md border border-gray-200 overflow-hidden">
                 <div className={`px-6 py-4 border-b ${
                   sa100Preview.isReadyForSubmission
                     ? 'border-emerald-200 bg-emerald-50'
@@ -709,7 +709,7 @@ export function TaxView({
                     </p>
                   </div>
                   {sa100Preview.isReadyForSubmission ? (
-                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 rounded-lg">
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 rounded">
                       <CheckIcon className="w-3.5 h-3.5 text-white flex-none" />
                       <span className="text-xs font-bold text-white tracking-wide">READY FOR HMRC SUBMISSION</span>
                     </div>
@@ -800,13 +800,13 @@ export function TaxView({
                         value={taxPaidInput}
                         onChange={(e) => setTaxPaidInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleApplyTaxPaid()}
-                        className="w-32 pl-6 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                        className="w-32 pl-6 text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white focus:outline-none focus:ring-1 focus:ring-slate-400"
                       />
                     </div>
                     <button
                       onClick={handleApplyTaxPaid}
                       disabled={!taxPaidInput.trim()}
-                      className="px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
+                      className="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 disabled:bg-zinc-100 disabled:text-zinc-400 text-white rounded transition-colors cursor-pointer disabled:cursor-not-allowed"
                     >
                       Apply
                     </button>
@@ -892,7 +892,7 @@ export function TaxView({
                           const v = e.target.value as StudentLoanPlan | ''
                           setStudentLoanPlan(v === '' ? undefined : v)
                         }}
-                        className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                        className="text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-400"
                       >
                         <option value="">— select —</option>
                         {(Object.entries(STUDENT_LOAN_PLAN_LABELS) as [StudentLoanPlan, string][]).map(([k, label]) => (
@@ -905,7 +905,7 @@ export function TaxView({
                         type="checkbox"
                         checked={declarationConfirmed}
                         onChange={(e) => setDeclarationConfirmed(e.target.checked)}
-                        className="mt-0.5 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        className="mt-0.5 w-4 h-4 rounded border-gray-300 text-slate-700 focus:ring-slate-400 cursor-pointer"
                       />
                       <span className="text-xs text-gray-700 leading-relaxed">
                         <span className="font-semibold">Client declaration confirmed: </span>

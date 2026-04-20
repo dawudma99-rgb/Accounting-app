@@ -36,28 +36,24 @@ function HistoryDetailModal({
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg overflow-hidden border border-zinc-200">
         {/* Header */}
-        <div className={`px-6 py-5 ${
-          confidence >= 90 ? 'bg-emerald-50 border-b border-emerald-100'
-          : confidence >= 70 ? 'bg-amber-50 border-b border-amber-100'
-          : 'bg-red-50 border-b border-red-100'
-        }`}>
+        <div className="px-6 py-5 border-b border-zinc-200">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-xs font-medium text-gray-500 mb-0.5">
+              <p className="text-xs font-medium text-zinc-400 mb-0.5 uppercase tracking-wide">
                 {new Date(transaction.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
               </p>
-              <h3 className="text-lg font-bold text-gray-900">
+              <h3 className="text-base font-semibold text-zinc-900">
                 {transaction.merchant ?? transaction.description ?? '—'}
               </h3>
-              <p className={`text-2xl font-bold mt-1 font-mono tabular-nums ${amt >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+              <p className={`text-xl font-semibold mt-1 font-mono tabular-nums ${amt >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
                 {amt >= 0 ? `+£${amt.toFixed(2)}` : `-£${Math.abs(amt).toFixed(2)}`}
               </p>
             </div>
             <button
               onClick={onClose}
-              className="w-8 h-8 flex items-center justify-center rounded-full bg-white/70 hover:bg-white text-gray-500 hover:text-gray-700 transition-colors cursor-pointer"
+              className="w-8 h-8 flex items-center justify-center rounded text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors cursor-pointer"
             >
               <XIcon className="w-4 h-4" />
             </button>
@@ -67,7 +63,7 @@ function HistoryDetailModal({
         {/* Body */}
         <div className="px-6 py-5 space-y-4">
           {transaction.review_reason && (
-            <div className="flex items-center gap-2.5 px-3.5 py-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+            <div className="flex items-center gap-2.5 px-3.5 py-2.5 bg-amber-50 border border-amber-200 rounded">
               <AlertIcon className="w-4 h-4 text-amber-500 flex-none" />
               <div>
                 <p className="text-xs font-semibold text-amber-700">Flagged for review</p>
@@ -79,14 +75,14 @@ function HistoryDetailModal({
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs text-gray-400 mb-1">Category</p>
-              <span className={`inline-flex items-center px-3 py-1 rounded-lg text-sm font-semibold ${CATEGORY_COLORS[cat] ?? 'bg-gray-100 text-gray-600'}`}>
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-sm text-xs font-medium ${CATEGORY_COLORS[cat] ?? 'bg-zinc-100 text-zinc-700'}`}>
                 {CATEGORY_LABELS[cat] ?? transaction.category}
               </span>
             </div>
             {src && (
               <div className="text-right">
                 <p className="text-xs text-gray-400 mb-1">Classification</p>
-                <span className={`inline-flex items-center px-3 py-1 rounded-lg text-sm font-medium ${SOURCE_CONFIG[src]?.className ?? 'bg-gray-100 text-gray-600'}`}>
+                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-sm text-xs font-medium ${SOURCE_CONFIG[src]?.className ?? 'bg-zinc-100 text-zinc-700'}`}>
                   {SOURCE_CONFIG[src]?.label ?? src}
                 </span>
               </div>
@@ -96,16 +92,16 @@ function HistoryDetailModal({
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <p className="text-xs text-gray-400">Confidence</p>
-              <span className={`text-sm font-bold tabular-nums ${
-                confidence >= 90 ? 'text-emerald-600'
+              <span className={`text-sm font-semibold tabular-nums ${
+                confidence >= 90 ? 'text-zinc-700'
                 : confidence >= 70 ? 'text-amber-600'
                 : 'text-red-600'
               }`}>{confidence}%</span>
             </div>
-            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-1.5 bg-zinc-100 rounded-sm overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all ${
-                  confidence >= 90 ? 'bg-emerald-500'
+                className={`h-full transition-all ${
+                  confidence >= 90 ? 'bg-zinc-400'
                   : confidence >= 70 ? 'bg-amber-400'
                   : 'bg-red-500'
                 }`}
@@ -120,19 +116,19 @@ function HistoryDetailModal({
                 <BrainIcon className="w-3.5 h-3.5 text-gray-400" />
                 <p className="text-xs text-gray-400">AI Reasoning</p>
               </div>
-              <blockquote className="text-sm text-gray-700 leading-relaxed bg-gray-50 border-l-4 border-indigo-300 px-4 py-3 rounded-r-lg italic">
+              <blockquote className="text-sm text-gray-700 leading-relaxed bg-zinc-50 border-l-4 border-zinc-300 px-4 py-3 italic">
                 {transaction.reasoning}
               </blockquote>
             </div>
           )}
 
           {matchSrc && (
-            <div className="flex items-center justify-between py-3 px-4 bg-gray-50 rounded-lg">
+            <div className="flex items-center justify-between py-3 px-4 bg-zinc-50 rounded border border-zinc-100">
               <div className="flex items-center gap-2">
                 <ReceiptIcon className="w-4 h-4 text-gray-400" />
                 <p className="text-sm text-gray-600">Evidence match</p>
               </div>
-              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${MATCH_SOURCE_CONFIG[matchSrc]?.className ?? 'bg-gray-100 text-gray-500'}`}>
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-sm text-xs font-medium ${MATCH_SOURCE_CONFIG[matchSrc]?.className ?? 'bg-zinc-100 text-zinc-500'}`}>
                 {MATCH_SOURCE_CONFIG[matchSrc]?.label ?? matchSrc}
               </span>
             </div>
@@ -142,7 +138,7 @@ function HistoryDetailModal({
         <div className="px-6 pb-6">
           <button
             onClick={onClose}
-            className="w-full py-2.5 border border-gray-200 hover:border-gray-300 text-gray-600 text-sm font-medium rounded-lg transition-colors cursor-pointer"
+            className="w-full py-2.5 border border-zinc-300 hover:border-zinc-400 text-zinc-600 text-sm font-medium rounded transition-colors cursor-pointer"
           >
             Close
           </button>
@@ -199,31 +195,31 @@ export function ClientDetailView({
       <div className="px-8 py-6 space-y-5 max-w-7xl">
         {!loading && savedTransactions.length > 0 && (
           <div className="grid grid-cols-3 gap-4">
-            <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+            <div className="bg-white rounded-md border border-gray-200 px-5 py-4">
               <div className="flex items-center gap-2 mb-2">
-                <span className="w-2 h-2 rounded-full bg-slate-400" />
+                <span className="w-2 h-2 rounded-sm bg-slate-400" />
                 <p className="text-xs text-gray-500 font-medium">Total Transactions</p>
               </div>
-              <p className="text-2xl font-bold tracking-tight text-gray-900">{savedTransactions.length}</p>
+              <p className="text-xl font-semibold tracking-tight tabular-nums text-gray-900">{savedTransactions.length}</p>
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+            <div className="bg-white rounded-md border border-gray-200 px-5 py-4">
               <div className="flex items-center gap-2 mb-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <span className="w-2 h-2 rounded-sm bg-emerald-500" />
                 <p className="text-xs text-gray-500 font-medium">Total Income</p>
               </div>
-              <p className="text-2xl font-bold tracking-tight text-emerald-700">£{income.toFixed(2)}</p>
+              <p className="text-xl font-semibold tracking-tight tabular-nums text-emerald-700">£{income.toFixed(2)}</p>
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 shadow-xs px-5 py-4">
+            <div className="bg-white rounded-md border border-gray-200 px-5 py-4">
               <div className="flex items-center gap-2 mb-2">
-                <span className="w-2 h-2 rounded-full bg-red-500" />
+                <span className="w-2 h-2 rounded-sm bg-red-500" />
                 <p className="text-xs text-gray-500 font-medium">Total Expenses</p>
               </div>
-              <p className="text-2xl font-bold tracking-tight text-red-600">£{expenses.toFixed(2)}</p>
+              <p className="text-xl font-semibold tracking-tight tabular-nums text-red-600">£{expenses.toFixed(2)}</p>
             </div>
           </div>
         )}
 
-        <div className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden">
+        <div className="bg-white rounded-md border border-gray-200 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-100">
             <h2 className="text-sm font-semibold text-gray-900">
               Transaction History
@@ -285,22 +281,22 @@ export function ClientDetailView({
                           {amt >= 0 ? `+£${amt.toFixed(2)}` : `-£${Math.abs(amt).toFixed(2)}`}
                         </td>
                         <td className="px-4 py-3.5">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ${CATEGORY_COLORS[cat] ?? 'bg-gray-100 text-gray-600'}`}>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-medium ${CATEGORY_COLORS[cat] ?? 'bg-zinc-100 text-zinc-700'}`}>
                             {CATEGORY_LABELS[cat] ?? t.category}
                           </span>
                         </td>
                         <td className="px-4 py-3.5 text-center">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold tabular-nums ${confidenceBadgeClass(t.confidence_score)}`}>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-semibold tabular-nums ${confidenceBadgeClass(t.confidence_score)}`}>
                             {t.confidence_score}%
                           </span>
                         </td>
                         <td className="px-4 py-3.5 text-center">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-medium ${
                             t.status === 'auto_approved' || t.status === 'reviewed'
-                              ? 'bg-emerald-100 text-emerald-700'
+                              ? 'bg-zinc-100 text-zinc-700'
                               : t.status === 'flagged'
-                              ? 'bg-amber-100 text-amber-700'
-                              : 'bg-gray-100 text-gray-500'
+                              ? 'bg-amber-50 text-amber-700'
+                              : 'bg-zinc-100 text-zinc-500'
                           }`}>
                             {t.status === 'auto_approved' ? 'Approved'
                               : t.status === 'reviewed' ? 'Reviewed'

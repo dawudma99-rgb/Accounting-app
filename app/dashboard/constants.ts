@@ -13,28 +13,28 @@ export const CATEGORY_LABELS: Record<TransactionCategory, string> = {
 }
 
 export const CATEGORY_COLORS: Record<TransactionCategory, string> = {
-  fuel:          'bg-orange-100 text-orange-700',
-  materials:     'bg-blue-100 text-blue-700',
-  tools:         'bg-purple-100 text-purple-700',
-  insurance:     'bg-indigo-100 text-indigo-700',
-  software:      'bg-cyan-100 text-cyan-700',
-  subcontractor: 'bg-pink-100 text-pink-700',
-  income:        'bg-emerald-100 text-emerald-700',
-  other:         'bg-gray-100 text-gray-600',
+  fuel:          'bg-zinc-100 text-zinc-700',
+  materials:     'bg-zinc-100 text-zinc-700',
+  tools:         'bg-zinc-100 text-zinc-700',
+  insurance:     'bg-zinc-100 text-zinc-700',
+  software:      'bg-zinc-100 text-zinc-700',
+  subcontractor: 'bg-zinc-100 text-zinc-700',
+  income:        'bg-zinc-100 text-zinc-700',
+  other:         'bg-zinc-100 text-zinc-500',
 }
 
 export const MATCH_SOURCE_CONFIG: Record<MatchSource, { label: string; className: string }> = {
-  receipt:             { label: 'Matched to receipt',             className: 'bg-emerald-100 text-emerald-700' },
-  'receipt-uncertain': { label: 'Matched to receipt (uncertain)', className: 'bg-yellow-100 text-yellow-700'  },
-  platform:            { label: 'Matched to platform',           className: 'bg-blue-100 text-blue-700'      },
-  unmatched:           { label: 'Unmatched',                     className: 'bg-gray-100 text-gray-500'      },
+  receipt:             { label: 'Matched to receipt',             className: 'bg-zinc-100 text-zinc-700'   },
+  'receipt-uncertain': { label: 'Matched to receipt (uncertain)', className: 'bg-amber-50 text-amber-700'  },
+  platform:            { label: 'Matched to platform',           className: 'bg-zinc-100 text-zinc-700'   },
+  unmatched:           { label: 'Unmatched',                     className: 'bg-zinc-100 text-zinc-500'   },
 }
 
 export const SOURCE_CONFIG: Record<DashboardTransaction['source'], { label: string; className: string }> = {
-  ai:        { label: 'AI classified', className: 'bg-purple-100 text-purple-700'   },
-  rules:     { label: 'Cached rule',   className: 'bg-indigo-100 text-indigo-700'   },
-  hardcoded: { label: 'Built-in rule', className: 'bg-slate-100 text-slate-600'     },
-  memory:    { label: 'Confirmed',     className: 'bg-emerald-100 text-emerald-700' },
+  ai:        { label: 'AI classified', className: 'bg-zinc-100 text-zinc-700' },
+  rules:     { label: 'Cached rule',   className: 'bg-zinc-100 text-zinc-700' },
+  hardcoded: { label: 'Built-in rule', className: 'bg-zinc-100 text-zinc-600' },
+  memory:    { label: 'Confirmed',     className: 'bg-zinc-100 text-zinc-700' },
 }
 
 export const BUSINESS_TYPE_LABELS: Record<BusinessType, string> = {

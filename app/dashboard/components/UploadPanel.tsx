@@ -26,21 +26,21 @@ function UploadZone({
 
       <button
         onClick={handleClick}
-        className="w-full h-[72px] flex flex-col items-center justify-center gap-1 border-2 border-dashed border-gray-200 hover:border-indigo-400 hover:bg-indigo-50/50 rounded-lg transition-colors cursor-pointer group"
+        className="w-full h-[72px] flex flex-col items-center justify-center gap-1 border-2 border-dashed border-gray-200 hover:border-zinc-400 hover:bg-zinc-50 rounded transition-colors cursor-pointer group"
       >
-        <UploadIcon className="w-4 h-4 text-gray-300 group-hover:text-indigo-400 transition-colors" />
-        <p className="text-xs font-medium text-gray-500 group-hover:text-indigo-600 transition-colors">{label}</p>
+        <UploadIcon className="w-4 h-4 text-gray-300 group-hover:text-zinc-500 transition-colors" />
+        <p className="text-xs font-medium text-gray-500 group-hover:text-zinc-700 transition-colors">{label}</p>
         <p className="text-xs text-gray-400">{description}</p>
       </button>
 
       {files.length > 0 && (
-        <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <div className="border border-gray-200 rounded overflow-hidden">
           {files.map((f, i) => (
             <div
               key={i}
-              className="flex items-center gap-2 px-3 py-1.5 bg-white hover:bg-gray-50 border-b border-gray-100 last:border-b-0"
+              className="flex items-center gap-2 px-3 py-1.5 bg-white hover:bg-zinc-50 border-b border-gray-100 last:border-b-0"
             >
-              <CheckIcon className="w-3 h-3 text-emerald-500 flex-none" />
+              <CheckIcon className="w-3 h-3 text-zinc-400 flex-none" />
               <p className="flex-1 text-xs text-gray-700 truncate min-w-0">{f.name}</p>
               <button
                 onClick={() => onRemove(i)}
@@ -80,7 +80,7 @@ export function UploadPanel({
   const platformRef = useRef<HTMLInputElement>(null)
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-xs p-5">
+    <div className="bg-white rounded-md border border-gray-200 p-5">
       <h2 className="text-sm font-semibold text-gray-900 mb-4">Import Data</h2>
       <div className="grid grid-cols-3 gap-4">
         <UploadZone
@@ -113,7 +113,7 @@ export function UploadPanel({
         <button
           onClick={onProcess}
           disabled={processingProgress !== null || bankStatements.length === 0}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
+          className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors cursor-pointer disabled:cursor-not-allowed"
         >
           {processingProgress !== null ? (
             <><SpinnerIcon className="w-4 h-4 animate-spin" /> {processingProgress.done} / {processingProgress.total}</>

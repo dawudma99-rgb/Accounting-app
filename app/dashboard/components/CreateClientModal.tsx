@@ -40,7 +40,7 @@ export function CreateClientModal({
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden border border-zinc-200">
         <div className="px-6 py-5 border-b border-gray-100">
           <h2 className="text-base font-semibold text-gray-900">New Client</h2>
           <p className="text-xs text-gray-400 mt-0.5">Create a new client profile</p>
@@ -57,7 +57,7 @@ export function CreateClientModal({
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. John Davies"
               autoFocus
-              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              className="w-full text-sm border border-gray-200 rounded px-3 py-2 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
             />
           </div>
 
@@ -66,7 +66,7 @@ export function CreateClientModal({
             <select
               value={businessType}
               onChange={(e) => setBusinessType(e.target.value as BusinessType)}
-              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              className="w-full text-sm border border-gray-200 rounded px-3 py-2 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-400"
             >
               {(Object.entries(BUSINESS_TYPE_LABELS) as [BusinessType, string][]).map(([key, label]) => (
                 <option key={key} value={key}>{label}</option>
@@ -83,26 +83,26 @@ export function CreateClientModal({
               value={utr}
               onChange={(e) => setUtr(e.target.value)}
               placeholder="10-digit HMRC reference"
-              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-300 font-mono"
+              className="w-full text-sm border border-gray-200 rounded px-3 py-2 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-300 font-mono"
             />
           </div>
 
           {error && (
-            <p className="text-xs text-red-600 bg-red-50 border border-red-100 px-3 py-2 rounded-lg">{error}</p>
+            <p className="text-xs text-red-600 bg-red-50 border border-red-100 px-3 py-2 rounded">{error}</p>
           )}
 
           <div className="flex gap-3 pt-1">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 border border-gray-200 hover:border-gray-300 text-gray-600 text-sm font-medium rounded-lg transition-colors cursor-pointer"
+              className="flex-1 py-2.5 border border-zinc-300 hover:border-zinc-400 text-zinc-600 text-sm font-medium rounded transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={saving || !name.trim()}
-              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors cursor-pointer"
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded transition-colors cursor-pointer"
             >
               {saving ? <><SpinnerIcon className="w-4 h-4 animate-spin" /> Creating…</> : 'Create Client'}
             </button>
