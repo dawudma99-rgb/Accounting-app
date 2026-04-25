@@ -2,8 +2,11 @@
 
 import { useState, useEffect } from 'react'
 import type { TransactionCategory } from '@/types/transaction'
-import { getClientTransactions } from '../actions'
-import type { ClientRecord, SavedTransaction } from '../actions'
+import { getClientTransactions, getClientFlags, runFlagCheck, getReturnEvaluation, advanceReturn } from '../actions'
+import type { ClientRecord, SavedTransaction, ClientFlag, ReturnEvaluation, ReturnStatus } from '../actions'
+import { FlagsPanel } from './FlagsPanel'
+import { ReturnStatusGate } from './ReturnStatusGate'
+import { DEFAULT_TAX_YEAR } from '@/config/taxYears'
 import type { DashboardTransaction, MatchSource } from '../types'
 import {
   CATEGORY_LABELS, CATEGORY_COLORS,
@@ -158,14 +161,40 @@ export function ClientDetailView({
   onBack: () => void
 }) {
   const [savedTransactions, setSavedTransactions] = useState<SavedTransaction[]>([])
+  const [flags,             setFlags]             = useState<ClientFlag[]>([])
+  const [evaluation,        setEvaluation]        = useState<ReturnEvaluation | null>(null)
+  const [advancing,         setAdvancing]         = useState(false)
+  const [advanceError,      setAdvanceError]      = useState<string | null>(null)
   const [loading,           setLoading]           = useState(true)
   const [selected,          setSelected]          = useState<SavedTransaction | null>(null)
 
+  const TAX_YEAR = DEFAULT_TAX_YEAR
+
   useEffect(() => {
-    getClientTransactions(client.id)
-      .then(setSavedTransactions)
-      .finally(() => setLoading(false))
+    setLoading(true)
+    Promise.all([
+      getClientTransactions(client.id),
+      runFlagCheck(client.id, TAX_YEAR).then(() => getClientFlags(client.id)),
+      getReturnEvaluation(client.id, TAX_YEAR),
+    ]).then(([transactions, clientFlags, eval_]) => {
+      setSavedTransactions(transactions)
+      setFlags(clientFlags)
+      setEvaluation(eval_)
+    }).finally(() => setLoading(false))
   }, [client.id])
+
+  async function handleAdvance(to: ReturnStatus) {
+    setAdvancing(true)
+    setAdvanceError(null)
+    try {
+      const updated = await advanceReturn(client.id, TAX_YEAR, to)
+      setEvaluation(updated)
+    } catch (e) {
+      setAdvanceError(e instanceof Error ? e.message : 'Failed to advance return status')
+    } finally {
+      setAdvancing(false)
+    }
+  }
 
   const income   = savedTransactions.filter((t) => Number(t.amount) > 0).reduce((s, t) => s + Number(t.amount), 0)
   const expenses = savedTransactions.filter((t) => Number(t.amount) < 0).reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
@@ -193,6 +222,23 @@ export function ClientDetailView({
       </div>
 
       <div className="px-8 py-6 space-y-5 max-w-7xl">
+        {advanceError && (
+          <div className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+            <AlertIcon className="w-4 h-4 text-red-500 flex-none mt-0.5" />
+            <p>{advanceError}</p>
+          </div>
+        )}
+
+        {!loading && evaluation && (
+          <ReturnStatusGate
+            evaluation={evaluation}
+            onAdvance={handleAdvance}
+            advancing={advancing}
+          />
+        )}
+
+        {!loading && <FlagsPanel initialFlags={flags} />}
+
         {!loading && savedTransactions.length > 0 && (
           <div className="grid grid-cols-3 gap-4">
             <div className="bg-white rounded-md border border-gray-200 px-5 py-4">

@@ -2,16 +2,16 @@ import type { TaxYearConfig } from '@/types/tax'
 
 // ─── Tax Year Definitions ─────────────────────────────────────────────────────
 //
-// To add a new tax year:
-//   1. Add a new entry to TAX_YEARS below.
-//   2. Update DEFAULT_TAX_YEAR if needed.
-//   3. Nothing else changes — the calculator and UI are config-driven.
+// All year-specific HMRC rates and thresholds live here.
+// To add a new tax year: add one entry to TAX_YEARS and update DEFAULT_TAX_YEAR.
+// Nothing in the calculator or UI needs to change.
 //
 // Sources:
-//   Mileage rates:    https://www.gov.uk/hmrc-internal-manuals/employment-income-manual/eim31205
-//   Income tax rates: https://www.gov.uk/income-tax-rates
-//   NI rates:         https://www.gov.uk/national-insurance/how-much-you-pay
-//   Payment dates:    https://www.gov.uk/self-assessment-tax-returns/deadlines
+//   Mileage:      https://www.gov.uk/hmrc-internal-manuals/employment-income-manual/eim31205
+//   Income tax:   https://www.gov.uk/income-tax-rates
+//   NI:           https://www.gov.uk/national-insurance/how-much-you-pay
+//   Student loan: https://www.gov.uk/repaying-your-student-loan/what-you-pay
+//   Payments:     https://www.gov.uk/self-assessment-tax-returns/deadlines
 
 const TAX_YEARS: Record<string, TaxYearConfig> = {
   '2025/26': {
@@ -20,15 +20,13 @@ const TAX_YEARS: Record<string, TaxYearConfig> = {
     endDate:   '2026-04-05',
 
     mileageRates: [
-      { bandSizeMiles: 10_000, ratePerMile: 0.45 }, // first 10,000 miles
-      { bandSizeMiles: null,   ratePerMile: 0.25 }, // above 10,000 miles
+      { bandSizeMiles: 10_000, ratePerMile: 0.45 },
+      { bandSizeMiles: null,   ratePerMile: 0.25 },
     ],
 
     incomeTax: {
       personalAllowance: 12_570,
-      // Above £100,000 the allowance reduces by £1 per £2 of excess income,
-      // fully withdrawn at £125,140 (i.e. £100,000 + 2 × £12,570).
-      taperThreshold: 100_000,
+      taperThreshold:    100_000,
       bands: [
         { label: 'Basic rate',      from: 0,       to: 37_700,  rate: 0.20 },
         { label: 'Higher rate',     from: 37_700,  to: 112_570, rate: 0.40 },
@@ -38,32 +36,34 @@ const TAX_YEARS: Record<string, TaxYearConfig> = {
 
     nationalInsurance: {
       class2: {
-        smallProfitsThreshold: 12_570,
-        // Class 2 is no longer a mandatory payment from April 2024.
-        // State pension credit is automatic if profits exceed the threshold.
-        // Voluntary rate shown for clients who wish to fill NI record gaps.
-        weeklyRate:  3.45,
-        weeksInYear: 52,
+        // Class 2 abolished April 2024. Profits ≥ this threshold secure state
+        // pension credit automatically. Below it, voluntary Class 2 available.
+        smallProfitsThreshold: 6_725,
+        weeklyRate:            3.45,
+        weeksInYear:           52,
       },
       class4: {
         lowerProfitsLimit: 12_570,
         upperProfitsLimit: 50_270,
-        lowerRate:         0.06, // 6% on profits between lower and upper limit
-        upperRate:         0.02, // 2% on profits above upper limit
+        lowerRate:         0.06,
+        upperRate:         0.02,
       },
     },
 
+    // Student loan repayment thresholds — verify annually before each tax year
+    studentLoans: {
+      plan1: { threshold: 24_990, rate: 0.09 },
+      plan2: { threshold: 27_295, rate: 0.09 },
+      plan4: { threshold: 31_395, rate: 0.09 },
+      pgl:   { threshold: 21_000, rate: 0.06 },
+    },
+
     payments: {
-      // 31 January 2027 — filing deadline, balancing payment, and first POA
-      januaryDate: '2027-01-31',
-      // 31 July 2027 — second payment on account
-      julyDate:    '2027-07-31',
-      // Payments on account are only required if the SA liability exceeds £1,000
+      januaryDate:        '2027-01-31',
+      julyDate:           '2027-07-31',
       onAccountThreshold: 1_000,
     },
 
-    // Turnover at or below this figure allows use of SA103S (short form).
-    // Aligned to the VAT registration threshold for 2025/26.
     sa103sThreshold: 90_000,
   },
 }

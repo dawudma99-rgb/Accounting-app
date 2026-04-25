@@ -27,7 +27,8 @@ export interface PlatformMatchResult {
 
 // ─── Tolerances ───────────────────────────────────────────────────────────────
 
-const AMOUNT_TOLERANCE = 2    // ±£2
+const AMOUNT_TOLERANCE = 2 
+   // ±£2
 const DATE_TOLERANCE   = 3    // ±3 calendar days
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

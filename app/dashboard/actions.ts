@@ -1,6 +1,8 @@
 'use server'
 
 import { confirmRule } from '@/services/categorisation/engine'
+import { checkClientCompleteness, raiseSummaryFlags } from '@/services/flags'
+import { getClientSummary } from '@/lib/client'
 import { extractReceiptsFromImages } from '@/services/ocr/receipt'
 import type { OcrParseResult } from '@/services/ocr/receipt'
 import { supabaseServer } from '@/lib/supabase/server'
@@ -10,7 +12,12 @@ import type {
 } from '@/types/transaction'
 import { calculateTaxSummary } from '@/services/tax/calculator'
 import { getTaxYearConfig, DEFAULT_TAX_YEAR } from '@/config/taxYears'
-import type { TaxSummary } from '@/types/tax'
+import type { TaxSummary, VehicleMethod, StudentLoanPlan } from '@/types/tax'
+import {
+  evaluateReturn,
+  advanceReturnStatus,
+} from '@/services/returns/evaluate'
+import type { ReturnEvaluation, ReturnStatus } from '@/services/returns/evaluate'
 
 // ─── Client types ─────────────────────────────────────────────────────────────
 
@@ -228,46 +235,353 @@ export async function loadConfirmedRules(
   }))
 }
 
-// ─── Tax Summary ──────────────────────────────────────────────────────────────
+// ─── Flags ────────────────────────────────────────────────────────────────────
+
+export interface ClientFlag {
+  id:              string
+  client_id:       string
+  tax_year:        string | null
+  flag_type:       string
+  description:     string
+  status:          string
+  raised_at:       string
+  resolved_at:     string | null
+  override_reason: string | null
+}
 
 /**
- * Fetch all transactions saved for a client, filter to the given tax year's
- * date range, split into approved vs flagged, then run the pure calculator.
+ * Run the P-01 to P-33 completeness check for a client and persist any new flags.
+ * Safe to call repeatedly — will not duplicate open flags.
+ */
+export async function runFlagCheck(clientId: string, taxYear: string): Promise<void> {
+  const summary = await getClientSummary(clientId)
+  await checkClientCompleteness(summary, taxYear)
+}
+
+/**
+ * Fetch all open flags for a client, newest first.
+ */
+export async function getClientFlags(clientId: string): Promise<ClientFlag[]> {
+  const { data, error } = await supabaseServer
+    .from('flags')
+    .select('*')
+    .eq('client_id', clientId)
+    .eq('status', 'open')
+    .order('raised_at', { ascending: false })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []) as ClientFlag[]
+}
+
+/**
+ * Resolve or override a flag. Optionally record the accountant's reason.
+ */
+export async function resolveFlag(
+  flagId: string,
+  status: 'resolved' | 'overridden',
+  overrideReason?: string,
+): Promise<void> {
+  const { error } = await supabaseServer
+    .from('flags')
+    .update({
+      status,
+      resolved_at:     new Date().toISOString(),
+      override_reason: overrideReason ?? null,
+    })
+    .eq('id', flagId)
+
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * Fetch open flag counts per client for the clients list view.
+ */
+export async function getClientFlagCounts(): Promise<Record<string, number>> {
+  const { data, error } = await supabaseServer
+    .from('flags')
+    .select('client_id')
+    .eq('status', 'open')
+
+  if (error) return {}
+
+  return (data ?? []).reduce<Record<string, number>>((acc, row) => {
+    acc[row.client_id] = (acc[row.client_id] ?? 0) + 1
+    return acc
+  }, {})
+}
+
+// ─── Tax figures persistence ──────────────────────────────────────────────────
+
+export interface SavedTaxInputs {
+  businessMiles:        number | null
+  otherIncome:          number | null
+  taxPaidAtSource:      number
+  studentLoanPlan:      string | null
+  declarationConfirmed: boolean
+  figuresSavedAt:       string | null
+}
+
+/**
+ * Fetch the previously saved calculator inputs for a client/year.
+ * Returns null if no tax_years row exists yet.
+ */
+export async function getSavedTaxInputs(
+  clientId: string,
+  taxYear: string,
+): Promise<SavedTaxInputs | null> {
+  const { data, error } = await supabaseServer
+    .from('tax_years')
+    .select('business_miles, other_income, tax_paid_at_source, student_loan_plan, declaration_confirmed, figures_saved_at')
+    .eq('client_id', clientId)
+    .eq('tax_year', taxYear)
+    .maybeSingle()
+
+  if (error) throw new Error(error.message)
+  if (!data) return null
+
+  return {
+    businessMiles:        data.business_miles        ?? null,
+    otherIncome:          data.other_income          ?? null,
+    taxPaidAtSource:      data.tax_paid_at_source    ?? 0,
+    studentLoanPlan:      data.student_loan_plan     ?? null,
+    declarationConfirmed: data.declaration_confirmed ?? false,
+    figuresSavedAt:       data.figures_saved_at      ?? null,
+  }
+}
+
+/**
+ * Persist the accountant's entered inputs and the resulting calculated figures
+ * to the tax_years row. Creates the row if it doesn't exist yet.
+ * Sets figures_saved_at, which is required before the return can advance.
+ */
+export async function saveTaxFigures(
+  clientId: string,
+  taxYear: string,
+  inputs: {
+    businessMiles?:       number
+    otherIncome?:         number
+    taxPaidAtSource:      number
+    studentLoanPlan?:     string
+    declarationConfirmed: boolean
+  },
+  figures: {
+    turnover:                 number
+    totalAllowableExpenses:   number
+    taxableProfit:            number
+    totalIncomeTax:           number
+    niClass2Annual:           number
+    totalNiClass4:            number
+    totalStudentLoan:         number
+    totalLiability:           number
+    requiresPaymentOnAccount: boolean
+    poaPerPayment:            number
+    balancingPayment:         number
+    lossesCarriedForward:     number
+    januaryDate:              string
+    julyDate:                 string
+  },
+): Promise<void> {
+  const { error } = await supabaseServer
+    .from('tax_years')
+    .upsert(
+      {
+        client_id:            clientId,
+        tax_year:             taxYear,
+        // Inputs
+        business_miles:       inputs.businessMiles       ?? null,
+        other_income:         inputs.otherIncome         ?? null,
+        tax_paid_at_source:   inputs.taxPaidAtSource,
+        student_loan_plan:    inputs.studentLoanPlan     ?? null,
+        declaration_confirmed: inputs.declarationConfirmed,
+        // Calculated figures
+        gross_income:         figures.turnover,
+        total_expenses:       figures.totalAllowableExpenses,
+        net_profit:           figures.taxableProfit,
+        income_tax:           figures.totalIncomeTax,
+        class2_nic:           figures.niClass2Annual,
+        class4_nic:           figures.totalNiClass4,
+        student_loan_repayment: figures.totalStudentLoan,
+        total_liability:      figures.totalLiability,
+        poa1_amount:          figures.requiresPaymentOnAccount ? figures.poaPerPayment : null,
+        poa1_date:            figures.requiresPaymentOnAccount ? figures.januaryDate   : null,
+        poa2_amount:          figures.requiresPaymentOnAccount ? figures.poaPerPayment : null,
+        poa2_date:            figures.requiresPaymentOnAccount ? figures.julyDate      : null,
+        balancing_payment:    figures.balancingPayment,
+        losses_carried_forward: figures.lossesCarriedForward,
+        figures_saved_at:     new Date().toISOString(),
+      },
+      { onConflict: 'client_id,tax_year' },
+    )
+
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * Sync summary-derived flags (unresolved transactions, other expenses, trading
+ * loss) to the DB. Called from TaxView after saving figures so evaluateReturn
+ * has full visibility into SA103-level conditions.
+ */
+export async function syncSummaryFlags(
+  clientId: string,
+  taxYear: string,
+  summary: TaxSummary,
+): Promise<void> {
+  await raiseSummaryFlags(clientId, taxYear, summary)
+}
+
+// ─── Return status & enforcement ─────────────────────────────────────────────
+
+export type { ReturnEvaluation, ReturnStatus }
+
+/**
+ * Evaluate the current return state for a client/year.
+ * Returns blockers, warnings, current status, and the next valid status.
+ * Safe to call at any time — read-only.
+ */
+export async function getReturnEvaluation(
+  clientId: string,
+  taxYear: string,
+): Promise<ReturnEvaluation> {
+  return evaluateReturn(clientId, taxYear)
+}
+
+/**
+ * Advance the return to the next status in the state machine.
+ * Throws if any blockers are present.
+ */
+export async function advanceReturn(
+  clientId: string,
+  taxYear: string,
+  to: ReturnStatus,
+): Promise<ReturnEvaluation> {
+  return advanceReturnStatus(clientId, taxYear, to)
+}
+
+// ─── Tax Summary ──────────────────────────────────────────────────────────────
+
+function priorTaxYear(year: string): string {
+  const [startStr, endStr] = year.split('/')
+  return `${Number(startStr) - 1}/${String(Number(endStr) - 1).padStart(2, '0')}`
+}
+
+/**
+ * Fetch all data required for the tax calculation, derive all calculator inputs
+ * from the DB, and return a fully computed TaxSummary.
  *
- * Only 'auto_approved' and 'reviewed' transactions contribute to the figures.
- * Flagged transactions are counted and surfaced in the result so the UI can
- * warn the accountant that the totals may be incomplete.
+ * businessMiles and otherIncome are UI-entered overrides (also persisted to
+ * tax_years via saveTaxFigures). All other inputs are pulled from the DB.
  */
 export async function getTaxSummary(
   clientId: string,
-  taxYear:      string = DEFAULT_TAX_YEAR,
+  taxYear:       string = DEFAULT_TAX_YEAR,
   businessMiles?: number,
   otherIncome?:   number,
 ): Promise<TaxSummary> {
-  const config = getTaxYearConfig(taxYear)
+  const config    = getTaxYearConfig(taxYear)
+  const priorYear = priorTaxYear(taxYear)
 
-  const { data, error } = await supabaseServer
-    .from('transactions')
-    .select('date, amount, category, status')
-    .eq('client_id', clientId)
+  // ── Fetch everything in parallel ────────────────────────────────────────────
+  const [txResult, vehicleResult, studentLoanResult, taxYearResult, priorYearResult] =
+    await Promise.all([
+      supabaseServer
+        .from('transactions')
+        .select('date, amount, category, status')
+        .eq('client_id', clientId),
 
-  if (error) throw new Error(error.message)
+      // Most recently purchased active vehicle
+      supabaseServer
+        .from('vehicles')
+        .select('id, expense_method, business_use_percent, co2_gkm, purchase_price, purchase_date, expense_method_locked, disposal_date, disposal_proceeds')
+        .eq('client_id', clientId)
+        .is('disposal_date', null)
+        .order('purchase_date', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
 
-  const all = data ?? []
+      supabaseServer
+        .from('student_loans')
+        .select('plan_type')
+        .eq('client_id', clientId)
+        .eq('active', true),
 
-  // Filter to the tax year's 6 Apr – 5 Apr window
-  const inYear = all.filter(
-    (t) => t.date >= config.startDate && t.date <= config.endDate,
+      supabaseServer
+        .from('tax_years')
+        .select('losses_brought_forward, overlap_relief_claimed, sa303_elected, sa303_reduced_amount')
+        .eq('client_id', clientId)
+        .eq('tax_year', taxYear)
+        .maybeSingle(),
+
+      supabaseServer
+        .from('tax_years')
+        .select('poa1_amount, poa1_paid, poa2_amount, poa2_paid')
+        .eq('client_id', clientId)
+        .eq('tax_year', priorYear)
+        .maybeSingle(),
+    ])
+
+  if (txResult.error) throw new Error(txResult.error.message)
+
+  const vehicle  = vehicleResult.data
+  const tyRow    = taxYearResult.data
+  const priorTY  = priorYearResult.data
+  const all      = txResult.data ?? []
+
+  // ── Filter transactions to tax year window ───────────────────────────────────
+  const inYear     = all.filter((t) => t.date >= config.startDate && t.date <= config.endDate)
+  const outOfRange = all.filter((t) => t.date < config.startDate || t.date > config.endDate)
+  const approved   = inYear.filter((t) => t.status === 'auto_approved' || t.status === 'reviewed')
+  const flagged    = inYear.filter((t) => t.status === 'flagged')
+
+  // ── Vehicle method and derived inputs ────────────────────────────────────────
+  const vehicleMethod: VehicleMethod = (vehicle?.expense_method as VehicleMethod | null) ?? 'mileage'
+  const businessUsePct = vehicle?.business_use_percent ?? 100
+
+  // Whether this is the vehicle's first year of use
+  const isYearOne = !!(
+    vehicle &&
+    !vehicle.expense_method_locked &&
+    vehicle.purchase_date >= config.startDate &&
+    vehicle.purchase_date <= config.endDate
   )
 
-  const outOfRange = all.filter(
-    (t) => t.date < config.startDate || t.date > config.endDate,
+  // Whether the vehicle was disposed of in this tax year
+  const isDisposalYear = !!(
+    vehicle?.disposal_date &&
+    vehicle.disposal_date >= config.startDate &&
+    vehicle.disposal_date <= config.endDate
   )
 
-  const approved = inYear.filter(
-    (t) => t.status === 'auto_approved' || t.status === 'reviewed',
-  )
-  const flagged  = inYear.filter((t) => t.status === 'flagged')
+  // Fuel transactions (isVehicle=true) are excluded from nonVehicleExpenses by
+  // the calculator. For actual/rental methods we sum them here and pass them back
+  // in as actualCostsGross / rentalCosts so they re-enter as vehicle deductions.
+  const fuelTotal = approved
+    .filter((t) => t.category === 'fuel' && Number(t.amount) < 0)
+    .reduce((s, t) => s + Math.abs(Number(t.amount)), 0)
+
+  // ── Capital allowance inputs (actual method only) ────────────────────────────
+  let openingPoolValue = 0
+  let vehicleAdditions = 0
+
+  if (vehicle && vehicleMethod === 'actual') {
+    vehicleAdditions = isYearOne && vehicle.purchase_price ? Number(vehicle.purchase_price) : 0
+
+    if (!isYearOne) {
+      const { data: poolYear } = await supabaseServer
+        .from('vehicle_pool_years')
+        .select('opening_pool')
+        .eq('vehicle_id', vehicle.id)
+        .eq('tax_year', taxYear)
+        .maybeSingle()
+      openingPoolValue = poolYear?.opening_pool ? Number(poolYear.opening_pool) : 0
+    }
+  }
+
+  // ── Prior year POA already paid (for balancing payment, C-47) ────────────────
+  const poa1Paid = (priorTY?.poa1_paid && priorTY?.poa1_amount) ? Number(priorTY.poa1_amount) : 0
+  const poa2Paid = (priorTY?.poa2_paid && priorTY?.poa2_amount) ? Number(priorTY.poa2_amount) : 0
+
+  // ── Student loan active plans ────────────────────────────────────────────────
+  const studentLoanPlans = (studentLoanResult.data ?? []).map((r) => r.plan_type as StudentLoanPlan)
 
   return calculateTaxSummary(
     approved.map((t) => ({
@@ -277,8 +591,26 @@ export async function getTaxSummary(
     })),
     config,
     {
+      vehicleMethod,
       businessMiles,
+      actualCostsGross:     vehicleMethod === 'actual'  ? fuelTotal    : undefined,
+      rentalCosts:          vehicleMethod === 'rental'  ? fuelTotal    : undefined,
+      businessUsePct,
+      openingPoolValue,
+      vehicleAdditions,
+      co2Gkm:               vehicle?.co2_gkm            ?? undefined,
+      isYearOne,
+      isDisposalYear,
+      disposalProceeds:     isDisposalYear && vehicle?.disposal_proceeds
+                              ? Number(vehicle.disposal_proceeds) : undefined,
       otherIncome,
+      overlapRelief:        tyRow?.overlap_relief_claimed   ? Number(tyRow.overlap_relief_claimed)   : 0,
+      lossesBroughtForward: tyRow?.losses_brought_forward   ? Number(tyRow.losses_brought_forward)   : 0,
+      poa1Paid,
+      poa2Paid,
+      sa303Elected:         tyRow?.sa303_elected             ?? false,
+      sa303Amount:          tyRow?.sa303_reduced_amount      ? Number(tyRow.sa303_reduced_amount)    : undefined,
+      studentLoanPlans,
       flaggedTransactionCount:    flagged.length,
       outOfRangeTransactionCount: outOfRange.length,
     },

@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { getTaxSummary } from '../actions'
-import type { ClientRecord } from '../actions'
+import { getTaxSummary, getReturnEvaluation, advanceReturn, getSavedTaxInputs, saveTaxFigures, syncSummaryFlags } from '../actions'
+import type { ClientRecord, ReturnEvaluation, ReturnStatus } from '../actions'
 import type { TaxSummary } from '@/types/tax'
+import { ReturnStatusGate } from './ReturnStatusGate'
 import { DEFAULT_TAX_YEAR, getAvailableTaxYears, getTaxYearConfig } from '@/config/taxYears'
 import { buildSA103Draft } from '@/services/tax/sa103Draft'
 import type { SA103Draft } from '@/types/sa103'
@@ -31,6 +32,11 @@ export function TaxView({
   const [otherIncomeInput,   setOtherIncomeInput]   = useState('')
   const [appliedOtherIncome, setAppliedOtherIncome] = useState<number | undefined>(undefined)
   const [summary,            setSummary]            = useState<TaxSummary | null>(null)
+  const [evaluation,         setEvaluation]         = useState<ReturnEvaluation | null>(null)
+  const [advancing,          setAdvancing]          = useState(false)
+  const [saving,             setSaving]             = useState(false)
+  const [savedAt,            setSavedAt]            = useState<string | null>(null)
+  const [inputsReady,        setInputsReady]        = useState(false)
   const [loading,            setLoading]            = useState(false)
   const [error,              setError]              = useState<string | null>(null)
   const [taxPaidInput,         setTaxPaidInput]         = useState('')
@@ -38,15 +44,105 @@ export function TaxView({
   const [studentLoanPlan,      setStudentLoanPlan]      = useState<StudentLoanPlan | undefined>(undefined)
   const [declarationConfirmed, setDeclarationConfirmed] = useState(false)
 
+  // Effect 1: load saved inputs whenever client/year changes
   useEffect(() => {
-    if (!selectedClient) { setSummary(null); return }
+    setInputsReady(false)
+    if (!selectedClient) {
+      setMilesInput(''); setAppliedMiles(undefined)
+      setOtherIncomeInput(''); setAppliedOtherIncome(undefined)
+      setTaxPaidInput(''); setAppliedTaxPaid(0)
+      setStudentLoanPlan(undefined); setDeclarationConfirmed(false)
+      setSavedAt(null); setSummary(null); setEvaluation(null)
+      setInputsReady(true)
+      return
+    }
+    getSavedTaxInputs(selectedClient.id, taxYear)
+      .then((saved) => {
+        if (saved) {
+          if (saved.businessMiles != null)  { setAppliedMiles(saved.businessMiles); setMilesInput(String(saved.businessMiles)) }
+          if (saved.otherIncome   != null)  { setAppliedOtherIncome(saved.otherIncome); setOtherIncomeInput(String(saved.otherIncome)) }
+          setAppliedTaxPaid(saved.taxPaidAtSource)
+          setTaxPaidInput(saved.taxPaidAtSource > 0 ? String(saved.taxPaidAtSource) : '')
+          setStudentLoanPlan((saved.studentLoanPlan as StudentLoanPlan | undefined) ?? undefined)
+          setDeclarationConfirmed(saved.declarationConfirmed)
+          setSavedAt(saved.figuresSavedAt)
+        }
+      })
+      .catch(() => { /* inputs stay at defaults */ })
+      .finally(() => setInputsReady(true))
+  }, [selectedClient?.id, taxYear]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Effect 2: calculate whenever inputs change (fires after Effect 1 sets inputsReady)
+  useEffect(() => {
+    if (!inputsReady || !selectedClient) { if (!selectedClient) { setSummary(null); setEvaluation(null) } return }
     setLoading(true)
     setError(null)
-    getTaxSummary(selectedClient.id, taxYear, appliedMiles, appliedOtherIncome)
-      .then(setSummary)
+    Promise.all([
+      getTaxSummary(selectedClient.id, taxYear, appliedMiles, appliedOtherIncome),
+      getReturnEvaluation(selectedClient.id, taxYear),
+    ])
+      .then(([s, e]) => { setSummary(s); setEvaluation(e) })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [selectedClient?.id, taxYear, appliedMiles, appliedOtherIncome]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedClient?.id, taxYear, appliedMiles, appliedOtherIncome, inputsReady]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleAdvance(to: ReturnStatus) {
+    if (!selectedClient) return
+    setAdvancing(true)
+    try {
+      const updated = await advanceReturn(selectedClient.id, taxYear, to)
+      setEvaluation(updated)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to advance return status')
+    } finally {
+      setAdvancing(false)
+    }
+  }
+
+  async function handleSave() {
+    if (!selectedClient || !summary) return
+    setSaving(true)
+    try {
+      await saveTaxFigures(
+        selectedClient.id,
+        taxYear,
+        {
+          businessMiles:        appliedMiles,
+          otherIncome:          appliedOtherIncome,
+          taxPaidAtSource:      appliedTaxPaid,
+          studentLoanPlan:      studentLoanPlan,
+          declarationConfirmed,
+        },
+        {
+          turnover:                 summary.turnover,
+          totalAllowableExpenses:   summary.totalAllowableExpenses,
+          taxableProfit:            summary.taxableProfit,
+          totalIncomeTax:           summary.liability.totalIncomeTax,
+          niClass2Annual:           summary.liability.niClass2Annual,
+          totalNiClass4:            summary.liability.totalNiClass4,
+          totalStudentLoan:         summary.liability.totalStudentLoan,
+          totalLiability:           summary.liability.totalLiability,
+          requiresPaymentOnAccount: summary.liability.requiresPaymentOnAccount,
+          poaPerPayment:            summary.liability.poaPerPayment,
+          balancingPayment:         summary.liability.balancingPayment,
+          lossesCarriedForward:     summary.lossesCarriedForward,
+          januaryDate:              summary.liability.januaryDate,
+          julyDate:                 summary.liability.julyDate,
+        },
+      )
+      // Sync summary-derived flags to DB so evaluateReturn sees them
+      await syncSummaryFlags(selectedClient.id, taxYear, summary)
+      const now = new Date().toISOString()
+      setSavedAt(now)
+      // Refresh evaluation — clears figures_not_saved blocker, reflects new flags
+      const updated = await getReturnEvaluation(selectedClient.id, taxYear)
+      setEvaluation(updated)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save figures')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   function handleApplyMileage() {
     const miles = Number(milesInput.replace(/,/g, ''))
@@ -197,6 +293,15 @@ export function TaxView({
           </div>
         ) : !summary ? null : (
           <>
+            {/* ── Return status gate ── */}
+            {evaluation && (
+              <ReturnStatusGate
+                evaluation={evaluation}
+                onAdvance={handleAdvance}
+                advancing={advancing}
+              />
+            )}
+
             {/* ── Summary cards ── */}
             <div className="grid grid-cols-3 gap-4">
               <div className="bg-white rounded-md border border-gray-200 px-5 py-4">
@@ -214,16 +319,16 @@ export function TaxView({
                 </div>
                 <p className="text-xl font-semibold tracking-tight tabular-nums text-red-600">{fmt(summary.totalAllowableExpenses)}</p>
                 <p className="text-xs text-gray-400 mt-1">
-                  Vehicle: {summary.vehicle.chosenMethod === 'mileage' ? 'mileage method' : 'actual costs'}
+                  Vehicle: {summary.vehicle.method === 'mileage' ? 'mileage method' : 'actual costs'}
                 </p>
               </div>
               <div className="bg-white rounded-md border border-gray-200 px-5 py-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <span className={`w-2 h-2 rounded-sm ${summary.netProfit >= 0 ? 'bg-slate-500' : 'bg-red-400'}`} />
-                  <p className="text-xs text-gray-500 font-medium">{summary.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</p>
+                  <span className={`w-2 h-2 rounded-sm ${summary.netProfitPreAdjustments >= 0 ? 'bg-slate-500' : 'bg-red-400'}`} />
+                  <p className="text-xs text-gray-500 font-medium">{summary.netProfitPreAdjustments >= 0 ? 'Net Profit' : 'Net Loss'}</p>
                 </div>
-                <p className={`text-2xl font-bold tracking-tight ${summary.netProfit >= 0 ? 'text-zinc-90000' : 'text-red-600'}`}>
-                  {summary.netProfit < 0 ? '−' : ''}{fmt(summary.netProfit)}
+                <p className={`text-2xl font-bold tracking-tight ${summary.netProfitPreAdjustments >= 0 ? 'text-zinc-90000' : 'text-red-600'}`}>
+                  {summary.netProfitPreAdjustments < 0 ? '−' : ''}{fmt(summary.netProfitPreAdjustments)}
                 </p>
                 <p className="text-xs text-gray-400 mt-1">Turnover minus all deductions</p>
               </div>
@@ -267,18 +372,18 @@ export function TaxView({
                   <div className="flex items-start justify-between">
                     <div>
                       <span className="text-sm text-gray-700">Actual fuel / vehicle costs</span>
-                      {summary.vehicle.chosenMethod === 'actual' && summary.vehicle.mileageAllowance !== null && (
+                      {summary.vehicle.method === 'actual' && summary.vehicle.mileageAllowance !== null && summary.vehicle.yearOneComparison && (
                         <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 text-zinc-600">
-                          ✓ Using this · saves {fmt(summary.vehicle.saving!)}
+                          ✓ Using this · saves {fmt(summary.vehicle.yearOneComparison.saving)}
                         </span>
                       )}
-                      {summary.vehicle.chosenMethod === 'actual' && summary.vehicle.mileageAllowance === null && (
+                      {summary.vehicle.method === 'actual' && summary.vehicle.mileageAllowance === null && (
                         <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 text-zinc-600">
                           Using this
                         </span>
                       )}
                     </div>
-                    <span className="text-sm font-semibold text-gray-800 tabular-nums">{fmt(summary.vehicle.actualCosts)}</span>
+                    <span className="text-sm font-semibold text-gray-800 tabular-nums">{fmt(summary.vehicle.actualCostsGross ?? 0)}</span>
                   </div>
 
                   {summary.vehicle.mileageAllowance !== null && (
@@ -287,9 +392,9 @@ export function TaxView({
                         <span className="text-sm text-gray-700">
                           HMRC mileage allowance ({summary.vehicle.businessMiles!.toLocaleString()} miles)
                         </span>
-                        {summary.vehicle.chosenMethod === 'mileage' && (
+                        {summary.vehicle.method === 'mileage' && summary.vehicle.yearOneComparison && (
                           <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-zinc-100 text-zinc-600">
-                            ✓ Using this · saves {fmt(summary.vehicle.saving!)}
+                            ✓ Using this · saves {fmt(summary.vehicle.yearOneComparison.saving)}
                           </span>
                         )}
                         {summary.vehicle.mileageBandBreakdown && (
@@ -338,7 +443,7 @@ export function TaxView({
 
                 <div className="flex justify-between items-center pt-3 mt-3 border-t border-gray-100">
                   <span className="text-xs font-semibold text-gray-500">
-                    Vehicle deduction ({summary.vehicle.chosenMethod === 'mileage' ? 'mileage method' : 'actual costs'})
+                    Vehicle deduction ({summary.vehicle.method === 'mileage' ? 'mileage method' : 'actual costs'})
                   </span>
                   <span className="text-sm font-bold text-gray-700 tabular-nums">{fmt(summary.vehicle.chosenAmount)}</span>
                 </div>
@@ -364,10 +469,10 @@ export function TaxView({
                 </div>
                 <div className="flex justify-between items-center pt-2 border-t border-gray-300">
                   <span className="text-base font-bold text-gray-900">
-                    {summary.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}
+                    {summary.netProfitPreAdjustments >= 0 ? 'Net Profit' : 'Net Loss'}
                   </span>
-                  <span className={`text-xl font-bold tabular-nums ${summary.netProfit >= 0 ? 'text-zinc-90000' : 'text-red-600'}`}>
-                    {summary.netProfit < 0 ? '−' : ''}{fmt(summary.netProfit)}
+                  <span className={`text-xl font-bold tabular-nums ${summary.netProfitPreAdjustments >= 0 ? 'text-zinc-90000' : 'text-red-600'}`}>
+                    {summary.netProfitPreAdjustments < 0 ? '−' : ''}{fmt(summary.netProfitPreAdjustments)}
                   </span>
                 </div>
               </div>
@@ -409,7 +514,7 @@ export function TaxView({
                 </div>
               </div>
 
-              {summary.liability.netProfit <= 0 ? (
+              {summary.taxableProfit <= 0 ? (
                 <div className="px-6 py-8 text-center">
                   <p className="text-sm text-gray-500">No tax liability — net profit is zero or a loss.</p>
                 </div>
@@ -421,7 +526,7 @@ export function TaxView({
                     <div className="space-y-1.5">
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-600">Self-employment profit</span>
-                        <span className="font-semibold text-gray-800 tabular-nums">{fmt(summary.liability.netProfit)}</span>
+                        <span className="font-semibold text-gray-800 tabular-nums">{fmt(summary.taxableProfit)}</span>
                       </div>
                       {summary.liability.otherIncome > 0 && (
                         <div className="flex justify-between text-sm">
@@ -519,14 +624,14 @@ export function TaxView({
                             <span className="text-gray-700 font-medium">{formatDate(summary.liability.januaryDate)}</span>
                             <p className="text-xs text-gray-400 mt-0.5">Filing deadline + 1st payment on account</p>
                           </div>
-                          <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.januaryPayment)}</span>
+                          <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.januaryTotal)}</span>
                         </div>
                         <div className="flex justify-between items-start text-sm">
                           <div>
                             <span className="text-gray-700 font-medium">{formatDate(summary.liability.julyDate)}</span>
                             <p className="text-xs text-gray-400 mt-0.5">2nd payment on account</p>
                           </div>
-                          <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.julyPayment)}</span>
+                          <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.julyTotal)}</span>
                         </div>
                       </div>
                     ) : (
@@ -535,7 +640,7 @@ export function TaxView({
                           <span className="text-gray-700 font-medium">{formatDate(summary.liability.januaryDate)}</span>
                           <p className="text-xs text-gray-400 mt-0.5">Full amount due — no payment on account required (liability below £1,000)</p>
                         </div>
-                        <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.januaryPayment)}</span>
+                        <span className="font-bold text-gray-800 tabular-nums">{fmt(summary.liability.januaryTotal)}</span>
                       </div>
                     )}
                   </div>
@@ -708,7 +813,7 @@ export function TaxView({
                       Full self-assessment outcome · accountant review layer before HMRC submission
                     </p>
                   </div>
-                  {sa100Preview.isReadyForSubmission ? (
+                  {evaluation?.isReadyForSubmission ? (
                     <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 rounded">
                       <CheckIcon className="w-3.5 h-3.5 text-white flex-none" />
                       <span className="text-xs font-bold text-white tracking-wide">READY FOR HMRC SUBMISSION</span>
@@ -717,7 +822,9 @@ export function TaxView({
                     <div className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg">
                       <XIcon className="w-3.5 h-3.5 text-red-500 flex-none" />
                       <span className="text-xs font-bold text-red-600">
-                        {sa100Preview.blockers.filter(b => b.severity === 'blocking').length} item{sa100Preview.blockers.filter(b => b.severity === 'blocking').length !== 1 ? 's' : ''} to resolve
+                        {evaluation
+                          ? `${evaluation.blockers.length} blocker${evaluation.blockers.length !== 1 ? 's' : ''}`
+                          : 'Save figures to check status'}
                       </span>
                     </div>
                   )}
@@ -943,6 +1050,35 @@ export function TaxView({
                       </div>
                     )}
                   </div>
+                </div>
+
+                {/* Save figures */}
+                <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/40 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold text-gray-700">Save figures to client record</p>
+                    {savedAt ? (
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Last saved {new Date(savedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}
+                        {' '}— required before advancing the return status
+                      </p>
+                    ) : (
+                      <p className="text-xs text-amber-600 mt-0.5">
+                        Not yet saved — return cannot advance until figures are saved
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-slate-800 hover:bg-slate-700 disabled:bg-slate-300 text-white rounded transition-colors cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    {saving ? (
+                      <SpinnerIcon className="w-3.5 h-3.5 animate-spin" />
+                    ) : savedAt ? (
+                      <CheckIcon className="w-3.5 h-3.5" />
+                    ) : null}
+                    {saving ? 'Saving…' : savedAt ? 'Update saved figures' : 'Save figures'}
+                  </button>
                 </div>
               </div>
             )}

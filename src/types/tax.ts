@@ -1,45 +1,27 @@
 import type { TransactionCategory } from './transaction'
 
 // ─── Tax Year Config ──────────────────────────────────────────────────────────
-//
-// All year-specific constants live here.
-// To add a new tax year: add one entry to src/config/taxYears.ts.
-// Nothing in the calculator or UI needs to change.
 
-/**
- * A single HMRC mileage rate band.
- * bandSizeMiles is the WIDTH of the band, not a cumulative ceiling.
- * null = unlimited — used for the final band only.
- */
 export interface MileageBand {
   bandSizeMiles: number | null
   ratePerMile: number
 }
 
-/** A single income tax band. from/to are amounts of TAXABLE INCOME (above personal allowance). */
 export interface IncomeTaxBand {
   label: string
   from: number
-  /** null = no upper limit */
   to: number | null
   rate: number
 }
 
 export interface IncomeTaxConfig {
   personalAllowance: number
-  /**
-   * Income above this threshold causes the personal allowance to taper:
-   * £1 reduction for every £2 of income above this figure.
-   * The allowance is fully withdrawn at taperThreshold + (2 × personalAllowance).
-   */
   taperThreshold: number
   bands: IncomeTaxBand[]
 }
 
 export interface NiClass2Config {
-  /** Profits must exceed this for the state pension credit to be secured */
   smallProfitsThreshold: number
-  /** Weekly voluntary rate — informational only since April 2024 */
   weeklyRate: number
   weeksInYear: number
 }
@@ -56,39 +38,33 @@ export interface NiConfig {
   class4: NiClass4Config
 }
 
+export interface StudentLoanPlanConfig {
+  threshold: number
+  rate: number
+}
+
+export interface StudentLoansConfig {
+  plan1: StudentLoanPlanConfig
+  plan2: StudentLoanPlanConfig
+  plan4: StudentLoanPlanConfig
+  pgl:   StudentLoanPlanConfig
+}
+
 export interface PaymentConfig {
-  /**
-   * 31 January following the tax year end.
-   * Sole traders file their return and pay any balancing amount here.
-   */
   januaryDate: string
-  /**
-   * 31 July following the filing deadline.
-   * Second payment on account for the following year.
-   */
   julyDate: string
-  /**
-   * Payments on account are only required if the SA liability exceeds this
-   * threshold. Below it, the full amount is due in January only.
-   */
   onAccountThreshold: number
 }
 
-/** All year-specific tax constants. Add a new entry per tax year — nothing else changes. */
 export interface TaxYearConfig {
   year: string
-  /** ISO date string — inclusive start of the tax year */
   startDate: string
-  /** ISO date string — inclusive end of the tax year */
   endDate: string
   mileageRates: MileageBand[]
   incomeTax: IncomeTaxConfig
   nationalInsurance: NiConfig
+  studentLoans: StudentLoansConfig
   payments: PaymentConfig
-  /**
-   * Turnover at or below which SA103S (short form) may be used.
-   * Tied to the VAT registration threshold for the year.
-   */
   sa103sThreshold: number
 }
 
@@ -100,9 +76,9 @@ export interface ApprovedTransaction {
   date: string
 }
 
-// ─── Vehicle Deduction ────────────────────────────────────────────────────────
+// ─── Vehicle ──────────────────────────────────────────────────────────────────
 
-export type VehicleMethod = 'actual' | 'mileage'
+export type VehicleMethod = 'actual' | 'mileage' | 'rental'
 
 export interface MileageBandUsage {
   miles: number
@@ -110,17 +86,52 @@ export interface MileageBandUsage {
   amount: number
 }
 
-export interface VehicleDeduction {
-  actualCosts: number
-  mileageAllowance: number | null
-  mileageBandBreakdown: MileageBandUsage[] | null
-  businessMiles: number | null
-  chosenMethod: VehicleMethod
-  chosenAmount: number
-  saving: number | null
+export interface CapitalAllowanceResult {
+  openingPool:           number
+  additions:             number
+  wdaRate:               number
+  wdaGross:              number
+  privateUseRestriction: number
+  allowableWDA:          number
+  closingPool:           number
+  balancingAllowance:    number
+  balancingCharge:       number
+  isEV:                  boolean
 }
 
-// ─── Expense Line Item ────────────────────────────────────────────────────────
+export interface VehicleDeduction {
+  method: VehicleMethod
+
+  // Mileage method (C-06 to C-09)
+  businessMiles:        number | null
+  mileageBandBreakdown: MileageBandUsage[] | null
+  mileageAllowance:     number | null
+
+  // Actual costs method (C-10 to C-17)
+  actualCostsGross:     number | null
+  businessUsePercent:   number | null
+  allowableActualCosts: number | null
+  capitalAllowance:     CapitalAllowanceResult | null
+
+  // Rental method (C-19 to C-20)
+  rentalCosts:         number | null
+  rentalFuel:          number | null
+  allowableRentalClaim: number | null
+  allowableFuelClaim:  number | null
+
+  // Final chosen amount for expenses
+  chosenAmount: number
+
+  // Year one comparison (C-18)
+  yearOneComparison: {
+    mileageClaim:      number
+    actualPlusWDA:     number
+    recommendedMethod: VehicleMethod
+    saving:            number
+  } | null
+}
+
+// ─── Expenses ─────────────────────────────────────────────────────────────────
 
 export interface ExpenseLineItem {
   category: TransactionCategory
@@ -129,9 +140,8 @@ export interface ExpenseLineItem {
   count: number
 }
 
-// ─── Tax Liability ────────────────────────────────────────────────────────────
+// ─── Income tax ───────────────────────────────────────────────────────────────
 
-/** One income tax band's contribution to the total bill */
 export interface TaxBandResult {
   label: string
   rate: number
@@ -139,47 +149,62 @@ export interface TaxBandResult {
   taxDue: number
 }
 
+// ─── Student loan ─────────────────────────────────────────────────────────────
+
+export type StudentLoanPlan = 'plan1' | 'plan2' | 'plan4' | 'pgl'
+
+export interface StudentLoanRepayment {
+  plan:       StudentLoanPlan
+  threshold:  number
+  rate:       number
+  repayment:  number
+}
+
+// ─── Tax Liability ────────────────────────────────────────────────────────────
+
 export interface TaxLiability {
-  // ── Inputs ────────────────────────────────────────────────────────────────
-  netProfit: number
-  otherIncome: number
-
   // ── Income basis ──────────────────────────────────────────────────────────
-  totalIncome: number
-  /** Standard personal allowance for the tax year */
-  personalAllowance: number
-  /** After taper — may be less than personalAllowance for high earners */
+  taxableProfit:              number
+  otherIncome:                number
+  adjustedNetIncome:          number
+  personalAllowance:          number
   effectivePersonalAllowance: number
-  taxableIncome: number
+  taxableIncome:              number
 
-  // ── Income tax ────────────────────────────────────────────────────────────
-  incomeTaxBands: TaxBandResult[]
-  totalIncomeTax: number
+  // ── Income tax (C-32 to C-35) ─────────────────────────────────────────────
+  incomeTaxBands:  TaxBandResult[]
+  totalIncomeTax:  number
 
-  // ── National Insurance ─────────────────────────────────────────────────────
-  niClass4Lower: number
-  niClass4Upper: number
-  totalNiClass4: number
-  /** True when profits ≥ small profits threshold — state pension credit secured */
+  // ── National Insurance (C-36 to C-39) ────────────────────────────────────
   niClass2Secured: boolean
-  /** Voluntary Class 2 annual amount — informational only, not in the total */
-  niClass2Annual: number
+  niClass2Annual:  number
+  niClass4Lower:   number
+  niClass4Upper:   number
+  totalNiClass4:   number
 
-  // ── Total & payments ──────────────────────────────────────────────────────
-  /** Income tax + Class 4 NI. Class 2 excluded — not a mandatory payment since April 2024. */
+  // ── Student loan (C-40 to C-44) ──────────────────────────────────────────
+  studentLoanBreakdown: StudentLoanRepayment[]
+  totalStudentLoan:     number
+
+  // ── Total liability (C-45) ───────────────────────────────────────────────
   totalLiability: number
+
+  // ── Payments on account (C-46 to C-49) ───────────────────────────────────
   requiresPaymentOnAccount: boolean
-  /** 50% of liability, due 31 January. Full liability if below POA threshold. */
-  januaryPayment: number
-  /** 50% of liability, due 31 July. Zero if below POA threshold. */
-  julyPayment: number
-  januaryDate: string
-  julyDate: string
+  poaPerPayment:            number
+  balancingPayment:         number
+  januaryTotal:             number
+  julyTotal:                number
+  januaryDate:              string
+  julyDate:                 string
+
+  // ── SA303 POA reduction (C-50) ────────────────────────────────────────────
+  sa303Elected:      boolean
+  sa303ReducedAmount: number | null
+  effectivePoaAmount: number
 
   // ── Take-home ─────────────────────────────────────────────────────────────
-  /** netProfit − totalLiability */
-  afterTaxProfit: number
-  /** totalLiability ÷ netProfit × 100 */
+  afterTaxProfit:  number
   effectiveTaxRate: number
 }
 
@@ -188,21 +213,49 @@ export interface TaxLiability {
 export interface TaxSummary {
   taxYear: string
 
-  turnover: number
-  incomeCount: number
+  // ── Income (C-01 to C-04) ────────────────────────────────────────────────
+  turnover:     number
+  otherIncome:  number
+  grossTurnover: number
+  incomeCount:  number
 
-  nonVehicleExpenses: ExpenseLineItem[]
+  // ── Expenses ──────────────────────────────────────────────────────────────
+  nonVehicleExpenses:      ExpenseLineItem[]
   totalNonVehicleExpenses: number
+  phoneClaim:              number
+  vehicle:                 VehicleDeduction
+  totalAllowableExpenses:  number
 
-  vehicle: VehicleDeduction
+  // ── Profit adjustments (C-24 to C-28) ───────────────────────────────────
+  netProfitPreAdjustments: number
+  overlapRelief:           number
+  netProfitPostOverlap:    number
+  lossesBroughtForward:    number
+  taxableProfit:           number
+  lossesRemainingAfterOffset: number
+  lossesCarriedForward:    number
+  isLossYear:              boolean
 
-  totalAllowableExpenses: number
-  netProfit: number
-
-  /** Full income tax and NI liability based on this year's net profit */
+  // ── Liability ─────────────────────────────────────────────────────────────
   liability: TaxLiability
 
-  approvedTransactionCount: number
-  flaggedTransactionCount: number
+  // ── Metadata ──────────────────────────────────────────────────────────────
+  approvedTransactionCount:   number
+  flaggedTransactionCount:    number
   outOfRangeTransactionCount: number
+}
+
+// ─── MTD Quarterly ───────────────────────────────────────────────────────────
+
+export interface MtdQuarterInput {
+  quarter:  1 | 2 | 3 | 4
+  income:   number
+  expenses: number
+}
+
+export interface MtdYtdResult {
+  quarter:             1 | 2 | 3 | 4
+  cumulativeIncome:    number
+  cumulativeExpenses:  number
+  indicativeProfit:    number
 }

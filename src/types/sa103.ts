@@ -30,7 +30,7 @@ export interface SA103ExpenseLine {
 /** The vehicle expense line — shown separately because the method matters for filing. */
 export interface SA103VehicleLine {
   hmrcLabel: 'Motor expenses'
-  method: 'actual' | 'mileage'
+  method: 'actual' | 'mileage' | 'rental'
   amount: number
   /** Human-readable explanation of the method and figures for the accountant */
   methodNote: string

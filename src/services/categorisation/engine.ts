@@ -21,20 +21,6 @@ const CONFIRMED_CONFIDENCE = 99
 
 const MODEL = 'claude-sonnet-4-20250514'
 
-// ─── Hardcoded rules ──────────────────────────────────────────────────────────
-
-/**
- * Merchants always categorised the same way regardless of business type.
- * Checked before the Supabase cache so they never need an AI call.
- */
-const HARDCODED_RULES: Array<{
-  pattern: RegExp
-  category: TransactionCategory
-  confidence: number
-}> = [
-  { pattern: /\bdvla\b/i, category: 'other', confidence: 95 },
-]
-
 // ─── Zod schema for Claude's structured response ──────────────────────────────
 
 const ClaudeCategorizationSchema = z.object({
@@ -292,19 +278,7 @@ export async function categoriseTransaction(
   transaction: Transaction,
   context: ClientContext,
 ): Promise<CategorizationResult> {
-  // 1. Hardcoded rules
-  for (const rule of HARDCODED_RULES) {
-    if (rule.pattern.test(transaction.description)) {
-      return {
-        category: rule.category,
-        confidence: rule.confidence,
-        source: 'rules',
-        matchedPattern: rule.pattern.source,
-      }
-    }
-  }
-
-  // 2. Supabase rules cache
+  // 1. Supabase rules cache
   const cached = await lookupRule(transaction.description, context.businessType, transaction.amount)
   if (cached && cached.confidence >= RULE_CONFIDENCE_THRESHOLD) {
     return {
@@ -315,13 +289,13 @@ export async function categoriseTransaction(
     }
   }
 
-  // 3. AI fallback
+  // 2. AI fallback
   const { category, confidence, reasoning, pattern, amountMin, amountMax } = await categoriseWithClaude(
     transaction,
     context,
   )
 
-  // 4. Persist pattern for next time
+  // 3. Persist pattern for next time
   await saveRule(pattern, context.businessType, category, confidence, amountMin, amountMax)
 
   return { category, confidence, reasoning, source: 'ai', matchedPattern: pattern }
