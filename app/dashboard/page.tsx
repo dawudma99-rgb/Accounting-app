@@ -5,6 +5,7 @@ import { getClients } from './actions'
 import type { ClientRecord } from './actions'
 import type { View, DashboardTransaction } from './types'
 import { BUSINESS_TYPE_LABELS } from './constants'
+import { DEFAULT_TAX_YEAR, getAvailableTaxYears } from '@/config/taxYears'
 import { useDashboardRun } from './hooks/useDashboardRun'
 import { Sidebar }            from './components/Sidebar'
 import { UploadPanel }        from './components/UploadPanel'
@@ -27,6 +28,10 @@ export default function DashboardPage() {
   const [selectedClient,   setSelectedClient]   = useState<ClientRecord | null>(null)
   const [showCreateClient, setShowCreateClient] = useState(false)
 
+  // ── Tax year ──
+  const [dashboardTaxYear, setDashboardTaxYear] = useState(DEFAULT_TAX_YEAR)
+  const availableYears = getAvailableTaxYears()
+
   // ── File picker state ──
   const [bankFiles,     setBankFiles]     = useState<File[]>([])
   const [platformFiles, setPlatformFiles] = useState<File[]>([])
@@ -36,7 +41,7 @@ export default function DashboardPage() {
   const [selected, setSelected] = useState<DashboardTransaction | null>(null)
 
   // ── Run orchestration ──
-  const run = useDashboardRun(selectedClient)
+  const run = useDashboardRun(selectedClient, dashboardTaxYear)
 
   useEffect(() => {
     getClients().then(setAllClients)
@@ -66,8 +71,17 @@ export default function DashboardPage() {
               <div className="flex items-center gap-4">
                 <div>
                   <h1 className="text-base font-semibold text-gray-900">Dashboard</h1>
-                  <p className="text-xs text-gray-400 mt-0.5">Tax year 2025–26</p>
                 </div>
+
+                <select
+                  value={dashboardTaxYear}
+                  onChange={(e) => setDashboardTaxYear(e.target.value)}
+                  className="text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-400"
+                >
+                  {availableYears.map((y) => (
+                    <option key={y} value={y}>Tax year {y}</option>
+                  ))}
+                </select>
 
                 {/* Client selector */}
                 <div className="flex items-center gap-2">

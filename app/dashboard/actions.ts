@@ -1,7 +1,7 @@
 'use server'
 
 import { confirmRule } from '@/services/categorisation/engine'
-import { checkClientCompleteness, raiseSummaryFlags } from '@/services/flags'
+import { checkClientCompleteness, raiseSummaryFlags, syncTransactionFlags } from '@/services/flags'
 import { getClientSummary } from '@/lib/client'
 import { extractReceiptsFromImages } from '@/services/ocr/receipt'
 import type { OcrParseResult } from '@/services/ocr/receipt'
@@ -30,6 +30,7 @@ export interface ClientRecord {
 }
 
 export interface TransactionToSave {
+  id: string
   date: string
   amount: number
   merchant: string | null
@@ -58,6 +59,17 @@ export interface SavedTransaction {
   matched_pattern: string | null
   review_reason: string | null
   created_at: string
+}
+
+export interface SavedTaxYearSummary {
+  id: string
+  tax_year: string
+  gross_income: number | null
+  total_expenses: number | null
+  net_profit: number | null
+  total_liability: number | null
+  return_status: ReturnStatus
+  figures_saved_at: string | null
 }
 
 // ─── Process a batch of transactions ─────────────────────────────────────────
@@ -159,6 +171,15 @@ export async function createClient(input: {
     .single()
 
   if (error) throw new Error(error.message)
+
+  // Trigger P-01–P-08 profile checks on the newly created client
+  try {
+    const client = await getClientSummary(data.id)
+    await checkClientCompleteness(client, DEFAULT_TAX_YEAR)
+  } catch (flagErr) {
+    console.warn('[flags] Profile check failed after createClient:', (flagErr as Error).message)
+  }
+
   return data as ClientRecord
 }
 
@@ -169,6 +190,7 @@ export async function createClient(input: {
 export async function saveRunTransactions(
   clientId: string,
   transactions: TransactionToSave[],
+  taxYear: string = DEFAULT_TAX_YEAR,
 ): Promise<void> {
   if (transactions.length === 0) return
 
@@ -176,6 +198,7 @@ export async function saveRunTransactions(
     .from('transactions')
     .insert(
       transactions.map((t) => ({
+        id:               t.id,
         client_id:        clientId,
         date:             t.date,
         amount:           t.amount,
@@ -193,20 +216,122 @@ export async function saveRunTransactions(
     )
 
   if (error) throw new Error(error.message)
+
+  // Count flagged transactions in this tax year and sync the DB flag
+  const tyConfig = getTaxYearConfig(taxYear)
+  const { count } = await supabaseServer
+    .from('transactions')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', clientId)
+    .eq('status', 'flagged')
+    .gte('date', tyConfig.startDate)
+    .lte('date', tyConfig.endDate)
+
+  await syncTransactionFlags(clientId, taxYear, count ?? 0).catch(console.warn)
 }
 
 /**
- * Fetch all saved transactions for a client, newest first.
+ * Mark one saved transaction as manually reviewed after accountant approval.
+ * This makes the database match the dashboard state used for tax summaries.
  */
-export async function getClientTransactions(clientId: string): Promise<SavedTransaction[]> {
-  const { data, error } = await supabaseServer
+export async function markTransactionReviewed(
+  transactionId: string,
+  category: TransactionCategory,
+  clientId?: string,
+  taxYear: string = DEFAULT_TAX_YEAR,
+): Promise<void> {
+  const { error } = await supabaseServer
+    .from('transactions')
+    .update({
+      category,
+      status:        'reviewed',
+      review_reason: null,
+    })
+    .eq('id', transactionId)
+
+  if (error) throw new Error(error.message)
+
+  if (clientId) {
+    const tyConfig = getTaxYearConfig(taxYear)
+    const { count } = await supabaseServer
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('client_id', clientId)
+      .eq('status', 'flagged')
+      .gte('date', tyConfig.startDate)
+      .lte('date', tyConfig.endDate)
+    await syncTransactionFlags(clientId, taxYear, count ?? 0).catch(console.warn)
+  }
+}
+
+/**
+ * Mark a set of saved transactions as reviewed after bulk approval.
+ */
+export async function bulkMarkTransactionsReviewed(
+  transactionIds: string[],
+  clientId?: string,
+  taxYear: string = DEFAULT_TAX_YEAR,
+): Promise<void> {
+  if (transactionIds.length === 0) return
+
+  const { error } = await supabaseServer
+    .from('transactions')
+    .update({
+      status:        'reviewed',
+      review_reason: null,
+    })
+    .in('id', transactionIds)
+
+  if (error) throw new Error(error.message)
+
+  if (clientId) {
+    const tyConfig = getTaxYearConfig(taxYear)
+    const { count } = await supabaseServer
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('client_id', clientId)
+      .eq('status', 'flagged')
+      .gte('date', tyConfig.startDate)
+      .lte('date', tyConfig.endDate)
+    await syncTransactionFlags(clientId, taxYear, count ?? 0).catch(console.warn)
+  }
+}
+
+/**
+ * Fetch saved transactions for a client, optionally scoped to a date range.
+ */
+export async function getClientTransactions(
+  clientId:  string,
+  startDate?: string,
+  endDate?:   string,
+): Promise<SavedTransaction[]> {
+  let query = supabaseServer
     .from('transactions')
     .select('id, date, amount, merchant, description, category, confidence_score, status, reasoning, source, match_source, matched_pattern, review_reason, created_at')
     .eq('client_id', clientId)
     .order('date', { ascending: false })
 
+  if (startDate) query = query.gte('date', startDate)
+  if (endDate)   query = query.lte('date', endDate)
+
+  const { data, error } = await query
   if (error) throw new Error(error.message)
   return (data ?? []) as SavedTransaction[]
+}
+
+/**
+ * Fetch saved tax-year summaries for the client detail view.
+ * This reads persisted figures from tax_years instead of recomputing from transactions.
+ */
+export async function getClientTaxYears(clientId: string): Promise<SavedTaxYearSummary[]> {
+  const { data, error } = await supabaseServer
+    .from('tax_years')
+    .select('id, tax_year, gross_income, total_expenses, net_profit, total_liability, return_status, figures_saved_at')
+    .eq('client_id', clientId)
+    .order('tax_year', { ascending: false })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []) as SavedTaxYearSummary[]
 }
 
 // ─── Rules ────────────────────────────────────────────────────────────────────
@@ -431,8 +556,6 @@ export async function syncSummaryFlags(
 
 // ─── Return status & enforcement ─────────────────────────────────────────────
 
-export type { ReturnEvaluation, ReturnStatus }
-
 /**
  * Evaluate the current return state for a client/year.
  * Returns blockers, warnings, current status, and the next valid status.
@@ -615,4 +738,109 @@ export async function getTaxSummary(
       outOfRangeTransactionCount: outOfRange.length,
     },
   )
+}
+
+// ─── Documents ────────────────────────────────────────────────────────────────
+
+export interface ClientDocument {
+  id:                  string
+  client_id:           string
+  tax_year:            string
+  category:            string
+  file_url:            string
+  file_name:           string
+  file_type:           string
+  expense_amount:      number | null
+  needs_review:        boolean
+  accountant_reviewed: boolean
+  uploaded_by:         string
+  upload_date:         string
+}
+
+/**
+ * Save a document record after the file has been uploaded to Supabase Storage.
+ * Auto-flags for review if the expense amount exceeds £200.
+ */
+export async function saveDocumentRecord(
+  clientId:      string,
+  taxYear:       string,
+  category:      string,
+  fileUrl:       string,
+  fileName:      string,
+  fileType:      string,
+  expenseAmount?: number,
+): Promise<ClientDocument> {
+  const needsReview = typeof expenseAmount === 'number' && expenseAmount > 200
+
+  const { data, error } = await supabaseServer
+    .from('documents')
+    .insert({
+      client_id:           clientId,
+      tax_year:            taxYear,
+      category,
+      file_url:            fileUrl,
+      file_name:           fileName,
+      file_type:           fileType,
+      expense_amount:      expenseAmount ?? null,
+      needs_review:        needsReview,
+      accountant_reviewed: false,
+      uploaded_by:         'accountant',
+    })
+    .select('*')
+    .single()
+
+  if (error) throw new Error(error.message)
+  return data as ClientDocument
+}
+
+/**
+ * Fetch all documents for a client and tax year, newest first.
+ */
+export async function getClientDocuments(
+  clientId: string,
+  taxYear:  string,
+): Promise<ClientDocument[]> {
+  const { data, error } = await supabaseServer
+    .from('documents')
+    .select('*')
+    .eq('client_id', clientId)
+    .eq('tax_year', taxYear)
+    .order('upload_date', { ascending: false })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []) as ClientDocument[]
+}
+
+/**
+ * Mark a document as reviewed by the accountant.
+ * Auto-resolves the document_over_200_unreviewed flag if no docs still need review.
+ */
+export async function markDocumentReviewed(
+  documentId: string,
+  clientId:   string,
+  taxYear:    string,
+): Promise<void> {
+  const { error } = await supabaseServer
+    .from('documents')
+    .update({ accountant_reviewed: true, needs_review: false })
+    .eq('id', documentId)
+
+  if (error) throw new Error(error.message)
+
+  const { count } = await supabaseServer
+    .from('documents')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', clientId)
+    .eq('tax_year', taxYear)
+    .eq('needs_review', true)
+
+  if ((count ?? 0) === 0) {
+    await supabaseServer
+      .from('flags')
+      .update({ status: 'resolved', resolved_at: new Date().toISOString() })
+      .eq('client_id', clientId)
+      .eq('tax_year', taxYear)
+      .eq('flag_type', 'document_over_200_unreviewed')
+      .eq('status', 'open')
+  }
 }

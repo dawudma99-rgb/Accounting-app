@@ -19,7 +19,7 @@ const RULE_CONFIDENCE_THRESHOLD = 80
 /** Confidence assigned when a user manually confirms a categorisation */
 const CONFIRMED_CONFIDENCE = 99
 
-const MODEL = 'claude-sonnet-4-20250514'
+const MODEL = 'claude-sonnet-4-6'
 
 // ─── Zod schema for Claude's structured response ──────────────────────────────
 

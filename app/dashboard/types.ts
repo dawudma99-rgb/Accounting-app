@@ -6,6 +6,23 @@ export type View = 'dashboard' | 'clients' | 'client-detail' | 'tax'
 
 export type MatchSource = 'receipt' | 'receipt-uncertain' | 'platform' | 'unmatched'
 
+export type ReturnStatus =
+  | 'collecting'
+  | 'ready_for_review'
+  | 'under_review'
+  | 'approved'
+  | 'submitted'
+
+export interface ReturnEvaluation {
+  clientId:               string
+  taxYear:                string
+  currentStatus:          ReturnStatus
+  canAdvanceTo:           ReturnStatus | null
+  blockers:               Array<{ code: string; message: string }>
+  warnings:               Array<{ code: string; message: string }>
+  isReadyForSubmission:   boolean
+}
+
 export interface DashboardTransaction {
   id: string
   date: string

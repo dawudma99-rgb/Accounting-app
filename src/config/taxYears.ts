@@ -14,6 +14,56 @@ import type { TaxYearConfig } from '@/types/tax'
 //   Payments:     https://www.gov.uk/self-assessment-tax-returns/deadlines
 
 const TAX_YEARS: Record<string, TaxYearConfig> = {
+  '2024/25': {
+    year:      '2024/25',
+    startDate: '2024-04-06',
+    endDate:   '2025-04-05',
+
+    mileageRates: [
+      { bandSizeMiles: 10_000, ratePerMile: 0.45 },
+      { bandSizeMiles: null,   ratePerMile: 0.25 },
+    ],
+
+    incomeTax: {
+      personalAllowance: 12_570,
+      taperThreshold:    100_000,
+      bands: [
+        { label: 'Basic rate',      from: 0,       to: 37_700,  rate: 0.20 },
+        { label: 'Higher rate',     from: 37_700,  to: 125_140, rate: 0.40 },
+        { label: 'Additional rate', from: 125_140, to: null,    rate: 0.45 },
+      ],
+    },
+
+    nationalInsurance: {
+      class2: {
+        smallProfitsThreshold: 6_725,
+        weeklyRate:            3.45,
+        weeksInYear:           52,
+      },
+      class4: {
+        lowerProfitsLimit: 12_570,
+        upperProfitsLimit: 50_270,
+        lowerRate:         0.06,
+        upperRate:         0.02,
+      },
+    },
+
+    studentLoans: {
+      plan1: { threshold: 24_990, rate: 0.09 },
+      plan2: { threshold: 27_295, rate: 0.09 },
+      plan4: { threshold: 31_395, rate: 0.09 },
+      pgl:   { threshold: 21_000, rate: 0.06 },
+    },
+
+    payments: {
+      januaryDate:        '2026-01-31',
+      julyDate:           '2026-07-31',
+      onAccountThreshold: 1_000,
+    },
+
+    sa103sThreshold: 90_000,
+  },
+
   '2025/26': {
     year:      '2025/26',
     startDate: '2025-04-06',

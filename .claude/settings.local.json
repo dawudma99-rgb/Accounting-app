@@ -3,7 +3,8 @@
     "allow": [
       "Bash(supabase db *)",
       "Bash(npx tsc *)",
-      "Bash(xargs grep *)"
+      "Bash(xargs grep *)",
+      "Bash(npx supabase *)"
     ]
   }
 }

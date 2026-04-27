@@ -29,6 +29,10 @@ export interface ReturnEvaluation {
   isReadyForSubmission:   boolean
 }
 
+// ─── Testing mode ────────────────────────────────────────────────────────────
+// TODO: Set to false once client profile UI and vehicle management UI are built.
+const SUPPRESS_SETUP_FLAGS = true
+
 // ─── Status transition map ────────────────────────────────────────────────────
 
 const NEXT_STATUS: Record<ReturnStatus, ReturnStatus | null> = {
@@ -96,7 +100,7 @@ export async function evaluateReturn(
 
   // ── Blocking: open action-severity flags ─────────────────────────────────
 
-  const ACTION_FLAGS = new Set([
+  const SETUP_FLAGS = new Set([
     'missing_identity_fields',
     'missing_sa_registration_date',
     'agent_not_authorised',
@@ -104,10 +108,15 @@ export async function evaluateReturn(
     'loe_not_signed',
     'expense_method_not_elected',
     'missing_mileage_log',
+  ])
+
+  const ACTION_FLAGS = new Set([
+    ...(SUPPRESS_SETUP_FLAGS ? [] : [...SETUP_FLAGS]),
     'unresolved_transactions',
   ])
 
   for (const flag of flags) {
+    if (SUPPRESS_SETUP_FLAGS && SETUP_FLAGS.has(flag.flag_type)) continue
     if (ACTION_FLAGS.has(flag.flag_type)) {
       blockers.push({ code: flag.flag_type, message: flag.description })
     } else {
@@ -115,29 +124,28 @@ export async function evaluateReturn(
     }
   }
 
-  // ── Blocking: hard client-record checks (belt-and-braces, independent of flags) ──
+  // ── Blocking: hard client-record checks (skipped in testing mode) ──────────
 
-  if (!client.utr) {
-    if (!blockers.some((b) => b.code === 'missing_identity_fields')) {
-      blockers.push({ code: 'missing_utr', message: 'UTR not recorded — required before filing.' })
+  if (!SUPPRESS_SETUP_FLAGS) {
+    if (!client.utr) {
+      if (!blockers.some((b) => b.code === 'missing_identity_fields')) {
+        blockers.push({ code: 'missing_utr', message: 'UTR not recorded — required before filing.' })
+      }
     }
-  }
-
-  if (!client.agent_authorised) {
-    if (!blockers.some((b) => b.code === 'agent_not_authorised')) {
-      blockers.push({ code: 'agent_not_authorised', message: '64-8 agent authorisation not confirmed.' })
+    if (!client.agent_authorised) {
+      if (!blockers.some((b) => b.code === 'agent_not_authorised')) {
+        blockers.push({ code: 'agent_not_authorised', message: '64-8 agent authorisation not confirmed.' })
+      }
     }
-  }
-
-  if (!client.aml_checked) {
-    if (!blockers.some((b) => b.code === 'aml_not_checked')) {
-      blockers.push({ code: 'aml_not_checked', message: 'AML check not completed.' })
+    if (!client.aml_checked) {
+      if (!blockers.some((b) => b.code === 'aml_not_checked')) {
+        blockers.push({ code: 'aml_not_checked', message: 'AML check not completed.' })
+      }
     }
-  }
-
-  if (!client.loe_signed_date) {
-    if (!blockers.some((b) => b.code === 'loe_not_signed')) {
-      blockers.push({ code: 'loe_not_signed', message: 'Letter of Engagement not signed.' })
+    if (!client.loe_signed_date) {
+      if (!blockers.some((b) => b.code === 'loe_not_signed')) {
+        blockers.push({ code: 'loe_not_signed', message: 'Letter of Engagement not signed.' })
+      }
     }
   }
 

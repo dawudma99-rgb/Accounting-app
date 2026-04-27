@@ -1,5 +1,5 @@
 import { supabaseServer as supabase } from '@/lib/supabase/server'
-import type { ClientSummary, TaxYear, Vehicle } from '@/lib/client'
+import type { ClientSummary, TaxYear } from '@/lib/client'
 import type { TaxSummary } from '@/types/tax'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -342,7 +342,29 @@ export async function raiseSummaryFlags(
   ])
 }
 
+/**
+ * Sync the unresolved_transactions flag based on a live flagged-transaction count.
+ * Call this whenever transactions are inserted or resolved so the DB flag stays
+ * in sync without waiting for the accountant to save figures.
+ */
+export async function syncTransactionFlags(
+  clientId: string,
+  taxYear: string,
+  flaggedCount: number,
+): Promise<void> {
+  await syncFlag(
+    clientId, taxYear,
+    'unresolved_transactions',
+    flaggedCount > 0,
+    `${flaggedCount} flagged transaction${flaggedCount !== 1 ? 's' : ''} excluded from figures. Resolve in Dashboard before treating as final.`,
+  )
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
+
+// TODO: Set to false once client profile UI and vehicle management UI are built.
+// These UIs don't exist yet so the flags fire permanently with no way to clear them.
+const SUPPRESS_SETUP_FLAGS = true
 
 /**
  * Run all P-01 to P-33 completeness checks for a client and the given tax year.
@@ -353,8 +375,10 @@ export async function checkClientCompleteness(
   client: ClientSummary,
   taxYear: string,
 ): Promise<void> {
-  await checkProfile(client)
-  await checkVehicles(client, taxYear)
+  if (!SUPPRESS_SETUP_FLAGS) {
+    await checkProfile(client)
+    await checkVehicles(client, taxYear)
+  }
 
   if (client.current_tax_year) {
     await checkTaxYear(client.profile.id, client.current_tax_year)

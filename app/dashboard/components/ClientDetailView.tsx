@@ -2,12 +2,13 @@
 
 import { useState, useEffect } from 'react'
 import type { TransactionCategory } from '@/types/transaction'
-import { getClientTransactions, getClientFlags, runFlagCheck, getReturnEvaluation, advanceReturn } from '../actions'
-import type { ClientRecord, SavedTransaction, ClientFlag, ReturnEvaluation, ReturnStatus } from '../actions'
+import { getClientTransactions, getClientFlags, getClientTaxYears, getClientDocuments, runFlagCheck, getReturnEvaluation, advanceReturn } from '../actions'
+import type { ClientRecord, SavedTransaction, ClientFlag, SavedTaxYearSummary, ClientDocument } from '../actions'
 import { FlagsPanel } from './FlagsPanel'
+import { DocumentsPanel } from './DocumentsPanel'
 import { ReturnStatusGate } from './ReturnStatusGate'
-import { DEFAULT_TAX_YEAR } from '@/config/taxYears'
-import type { DashboardTransaction, MatchSource } from '../types'
+import { DEFAULT_TAX_YEAR, getAvailableTaxYears, getTaxYearConfig } from '@/config/taxYears'
+import type { DashboardTransaction, MatchSource, ReturnEvaluation, ReturnStatus } from '../types'
 import {
   CATEGORY_LABELS, CATEGORY_COLORS,
   MATCH_SOURCE_CONFIG, SOURCE_CONFIG,
@@ -160,34 +161,42 @@ export function ClientDetailView({
   client: ClientRecord
   onBack: () => void
 }) {
+  const availableYears = getAvailableTaxYears()
+
+  const [selectedYear,      setSelectedYear]      = useState(DEFAULT_TAX_YEAR)
   const [savedTransactions, setSavedTransactions] = useState<SavedTransaction[]>([])
+  const [taxYears,          setTaxYears]          = useState<SavedTaxYearSummary[]>([])
   const [flags,             setFlags]             = useState<ClientFlag[]>([])
+  const [documents,         setDocuments]         = useState<ClientDocument[]>([])
   const [evaluation,        setEvaluation]        = useState<ReturnEvaluation | null>(null)
   const [advancing,         setAdvancing]         = useState(false)
   const [advanceError,      setAdvanceError]      = useState<string | null>(null)
   const [loading,           setLoading]           = useState(true)
   const [selected,          setSelected]          = useState<SavedTransaction | null>(null)
 
-  const TAX_YEAR = DEFAULT_TAX_YEAR
-
   useEffect(() => {
     setLoading(true)
+    const { startDate, endDate } = getTaxYearConfig(selectedYear)
     Promise.all([
-      getClientTransactions(client.id),
-      runFlagCheck(client.id, TAX_YEAR).then(() => getClientFlags(client.id)),
-      getReturnEvaluation(client.id, TAX_YEAR),
-    ]).then(([transactions, clientFlags, eval_]) => {
+      getClientTransactions(client.id, startDate, endDate),
+      getClientTaxYears(client.id),
+      runFlagCheck(client.id, selectedYear).then(() => getClientFlags(client.id)),
+      getReturnEvaluation(client.id, selectedYear),
+      getClientDocuments(client.id, selectedYear),
+    ]).then(([transactions, savedTaxYears, clientFlags, eval_, docs]) => {
       setSavedTransactions(transactions)
+      setTaxYears(savedTaxYears)
       setFlags(clientFlags)
       setEvaluation(eval_)
+      setDocuments(docs)
     }).finally(() => setLoading(false))
-  }, [client.id])
+  }, [client.id, selectedYear])
 
   async function handleAdvance(to: ReturnStatus) {
     setAdvancing(true)
     setAdvanceError(null)
     try {
-      const updated = await advanceReturn(client.id, TAX_YEAR, to)
+      const updated = await advanceReturn(client.id, selectedYear, to)
       setEvaluation(updated)
     } catch (e) {
       setAdvanceError(e instanceof Error ? e.message : 'Failed to advance return status')
@@ -216,9 +225,20 @@ export function ClientDetailView({
             <p className="text-xs text-gray-400 mt-0.5">{BUSINESS_TYPE_LABELS[client.business_type]}</p>
           </div>
         </div>
-        {client.utr && (
-          <span className="text-xs text-gray-400 font-mono">UTR: {client.utr}</span>
-        )}
+        <div className="flex items-center gap-3">
+          {client.utr && (
+            <span className="text-xs text-gray-400 font-mono">UTR: {client.utr}</span>
+          )}
+          <select
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(e.target.value)}
+            className="text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-400"
+          >
+            {availableYears.map((y) => (
+              <option key={y} value={y}>Tax year {y}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div className="px-8 py-6 space-y-5 max-w-7xl">
@@ -238,6 +258,74 @@ export function ClientDetailView({
         )}
 
         {!loading && <FlagsPanel initialFlags={flags} />}
+
+        {!loading && (
+          <DocumentsPanel
+            clientId={client.id}
+            taxYear={selectedYear}
+            initialDocuments={documents}
+          />
+        )}
+
+        {!loading && taxYears.length > 0 && (
+          <div className="bg-white rounded-md border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100">
+              <h2 className="text-sm font-semibold text-gray-900">
+                Tax Summaries
+                <span className="ml-2 text-xs font-normal text-gray-400">
+                  {taxYears.length} tax year{taxYears.length !== 1 ? 's' : ''}
+                </span>
+              </h2>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50/70">
+                    <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tax Year</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Turnover</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Expenses</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Net Profit</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Liability</th>
+                    <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Saved</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {taxYears.map((year) => {
+                    const profit = year.net_profit ?? 0
+                    return (
+                      <tr key={year.id} className="hover:bg-zinc-50 transition-colors">
+                        <td className="px-6 py-3.5 font-medium text-gray-900">{year.tax_year}</td>
+                        <td className="px-4 py-3.5 text-right font-mono text-emerald-700">
+                          £{(year.gross_income ?? 0).toFixed(2)}
+                        </td>
+                        <td className="px-4 py-3.5 text-right font-mono text-red-600">
+                          £{(year.total_expenses ?? 0).toFixed(2)}
+                        </td>
+                        <td className={`px-4 py-3.5 text-right font-mono font-semibold ${profit >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
+                          {profit < 0 ? '-' : ''}£{Math.abs(profit).toFixed(2)}
+                        </td>
+                        <td className="px-4 py-3.5 text-right font-mono text-gray-700">
+                          £{(year.total_liability ?? 0).toFixed(2)}
+                        </td>
+                        <td className="px-4 py-3.5 text-center">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-medium bg-zinc-100 text-zinc-700">
+                            {year.return_status.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5 text-xs text-gray-400">
+                          {year.figures_saved_at
+                            ? new Date(year.figures_saved_at).toLocaleDateString('en-GB')
+                            : 'Not saved'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {!loading && savedTransactions.length > 0 && (
           <div className="grid grid-cols-3 gap-4">

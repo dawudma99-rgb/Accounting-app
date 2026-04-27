@@ -11,9 +11,11 @@ import type { ExtractedReceipt } from '@/services/ocr/receipt'
 import { serialiseToCsv } from '@/lib/export/csv'
 import type { ExportRow } from '@/lib/export/csv'
 import {
+  bulkMarkTransactionsReviewed,
   bulkConfirmTransactions,
   confirmTransaction,
   loadConfirmedRules,
+  markTransactionReviewed,
   ocrReceipts,
   saveRunTransactions,
 } from '../actions'
@@ -44,6 +46,7 @@ export interface DashboardRunActions {
 
 export function useDashboardRun(
   selectedClient: ClientRecord | null,
+  taxYear:        string,
 ): DashboardRunState & DashboardRunActions {
   const [transactions,        setTransactions]        = useState<DashboardTransaction[]>([])
   const [isProcessing,        setIsProcessing]        = useState(false)
@@ -116,38 +119,43 @@ export function useDashboardRun(
 
       if (allWarnings.length > 0) setParseWarnings(allWarnings)
 
-      // 2. Categorise — single streaming request; server pushes each result as NDJSON
+      // 2. Categorise — batched streaming requests (max 100 transactions per request)
+      const BATCH_SIZE = 100
       setProcessingProgress({ done: 0, total: parsed.length })
       const rows: ProcessedRow[] = []
 
-      const catResponse = await fetch('/api/categorise', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transactions: parsed, businessType }),
-      })
+      for (let batchStart = 0; batchStart < parsed.length; batchStart += BATCH_SIZE) {
+        const batch = parsed.slice(batchStart, batchStart + BATCH_SIZE)
 
-      if (!catResponse.ok || !catResponse.body) {
-        throw new Error(`Categorisation request failed (${catResponse.status})`)
-      }
+        const catResponse = await fetch('/api/categorise', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transactions: batch, businessType }),
+        })
 
-      const reader  = catResponse.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer    = ''
+        if (!catResponse.ok || !catResponse.body) {
+          throw new Error(`Categorisation request failed (${catResponse.status})`)
+        }
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+        const reader  = catResponse.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer    = ''
 
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
 
-        for (const line of lines) {
-          if (!line.trim()) continue
-          const parsed2 = JSON.parse(line) as ProcessedRow & { __error?: string }
-          if (parsed2.__error) throw new Error(parsed2.__error)
-          rows.push(parsed2)
-          setProcessingProgress({ done: rows.length, total: parsed.length })
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+
+          for (const line of lines) {
+            if (!line.trim()) continue
+            const parsed2 = JSON.parse(line) as ProcessedRow & { __error?: string }
+            if (parsed2.__error) throw new Error(parsed2.__error)
+            rows.push(parsed2)
+            setProcessingProgress({ done: rows.length, total: parsed.length })
+          }
         }
       }
 
@@ -243,7 +251,7 @@ export function useDashboardRun(
           ? receiptMatch.matchSource
           : 'unmatched'
         return {
-          id:             String(i),
+          id:             crypto.randomUUID(),
           date:           r.date,
           description:    r.description,
           merchant:       r.merchant ?? r.description,
@@ -261,7 +269,8 @@ export function useDashboardRun(
         }
       })
 
-      setTransactions(applyMemory(mapped, merchantMemory))
+      const displayed = applyMemory(mapped, merchantMemory)
+      setTransactions(displayed)
       setUnmatchedPayouts(newUnmatched)
       setUnmatchedReceipts(newUnmatchedReceipts)
 
@@ -269,7 +278,8 @@ export function useDashboardRun(
       try {
         await saveRunTransactions(
           selectedClient.id,
-          mapped.map((t) => ({
+          displayed.map((t) => ({
+            id:             t.id,
             date:           t.date,
             amount:         t.amount,
             merchant:       t.merchant || null,
@@ -282,6 +292,7 @@ export function useDashboardRun(
             matchedPattern: t.matchedPattern ?? null,
             reviewReason:   t.reviewReason ?? null,
           })),
+          taxYear,
         )
       } catch (saveErr) {
         setError(`Categorisation complete but results could not be saved: ${(saveErr as Error).message}`)
@@ -336,7 +347,10 @@ export function useDashboardRun(
     setMerchantMemory((m) => new Map(m).set(pattern, { category: tx.category, pattern }))
 
     try {
-      await confirmTransaction(pattern, tx.category, businessType)
+      await Promise.all([
+        confirmTransaction(pattern, tx.category, businessType),
+        markTransactionReviewed(tx.id, tx.category, selectedClient?.id ?? undefined),
+      ])
     } catch {
       setTransactions((prev) =>
         prev.map((t) => t.id === id ? { ...t, status: tx.status, reviewReason: tx.reviewReason } : t),
@@ -354,9 +368,13 @@ export function useDashboardRun(
       pattern:  t.matchedPattern ?? t.merchant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').toUpperCase(),
       category: t.category,
     }))
+    const transactionIds = eligible.map((t) => t.id)
 
     try {
-      await bulkConfirmTransactions(rules, businessType)
+      await Promise.all([
+        bulkConfirmTransactions(rules, businessType),
+        bulkMarkTransactionsReviewed(transactionIds, selectedClient?.id ?? undefined),
+      ])
 
       const patternSet = new Set(rules.map((r) => r.pattern))
       setTransactions((prev) =>
@@ -379,7 +397,7 @@ export function useDashboardRun(
   }
 
   // TODO: implement recategorisation UI
-  function handleRecategorise(_id: string): void {
+  function handleRecategorise(): void {
     // placeholder — recategorisation flow not yet implemented
   }
 

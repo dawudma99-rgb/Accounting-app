@@ -193,6 +193,20 @@ function FlagRow({
 
 // ─── Flags panel ──────────────────────────────────────────────────────────────
 
+function TestingModeBanner() {
+  return (
+    <div className="flex items-start gap-2.5 px-4 py-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+      <span className="font-bold flex-none mt-0.5">⚠</span>
+      <div>
+        <span className="font-semibold">Testing mode: </span>
+        profile and vehicle flags are suppressed. Build the client profile UI and vehicle management UI, then set{' '}
+        <code className="font-mono bg-amber-100 px-1 rounded">SUPPRESS_SETUP_FLAGS = false</code>{' '}
+        in <code className="font-mono bg-amber-100 px-1 rounded">src/services/flags/index.ts</code> to re-enable them.
+      </div>
+    </div>
+  )
+}
+
 export function FlagsPanel({
   initialFlags,
 }: {
@@ -209,14 +223,19 @@ export function FlagsPanel({
 
   if (flags.length === 0) {
     return (
-      <div className="bg-white rounded-md border border-gray-200 px-5 py-4 flex items-center gap-2.5">
-        <CheckIcon className="w-4 h-4 text-emerald-500 flex-none" />
-        <p className="text-sm text-zinc-600">No open flags — client record is complete.</p>
+      <div className="space-y-2">
+        <TestingModeBanner />
+        <div className="bg-white rounded-md border border-gray-200 px-5 py-4 flex items-center gap-2.5">
+          <CheckIcon className="w-4 h-4 text-emerald-500 flex-none" />
+          <p className="text-sm text-zinc-600">No open flags — client record is complete.</p>
+        </div>
       </div>
     )
   }
 
   return (
+    <div className="space-y-2">
+    <TestingModeBanner />
     <div className="bg-white rounded-md border border-gray-200 overflow-hidden">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
@@ -243,6 +262,7 @@ export function FlagsPanel({
           <FlagRow key={flag.id} flag={flag} onResolved={handleResolved} />
         ))}
       </div>
+    </div>
     </div>
   )
 }

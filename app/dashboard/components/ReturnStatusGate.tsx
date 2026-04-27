@@ -1,7 +1,7 @@
 'use client'
 
 import { CheckIcon, AlertIcon, SpinnerIcon } from './icons'
-import type { ReturnEvaluation, ReturnStatus } from '@/services/returns/evaluate'
+import type { ReturnEvaluation, ReturnStatus } from '../types'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 

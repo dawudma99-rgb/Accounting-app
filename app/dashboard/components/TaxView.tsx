@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { getTaxSummary, getReturnEvaluation, advanceReturn, getSavedTaxInputs, saveTaxFigures, syncSummaryFlags } from '../actions'
-import type { ClientRecord, ReturnEvaluation, ReturnStatus } from '../actions'
+import type { ClientRecord } from '../actions'
+import type { ReturnEvaluation, ReturnStatus } from '../types'
 import type { TaxSummary } from '@/types/tax'
 import { ReturnStatusGate } from './ReturnStatusGate'
 import { DEFAULT_TAX_YEAR, getAvailableTaxYears, getTaxYearConfig } from '@/config/taxYears'
