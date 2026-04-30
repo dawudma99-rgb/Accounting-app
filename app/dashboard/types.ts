@@ -1,5 +1,5 @@
 import type { TransactionCategory } from '@/types/transaction'
-import type { UberWeeklyRow } from '@/services/platformFeed/uber'
+import type { PlatformPayoutRow } from '@/services/matching/platform'
 import type { ExtractedReceipt } from '@/services/ocr/receipt'
 
 export type View = 'dashboard' | 'clients' | 'client-detail' | 'tax'
@@ -42,7 +42,7 @@ export interface DashboardTransaction {
   /** Regex pattern from the engine — passed back to confirmRule on approve */
   matchedPattern?: string
   /** The platform payout row this transaction was matched to. */
-  matchedRow?: UberWeeklyRow
+  matchedRow?: PlatformPayoutRow
   /** The extracted receipt this transaction was matched to. */
   matchedReceipt?: ExtractedReceipt
 }

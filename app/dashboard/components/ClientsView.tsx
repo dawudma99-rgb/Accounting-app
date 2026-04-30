@@ -1,19 +1,15 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { getClients, getClientFlagCounts } from '../actions'
 import type { ClientRecord } from '../actions'
 import { BUSINESS_TYPE_LABELS } from '../constants'
 import { CreateClientModal } from './CreateClientModal'
 import { SpinnerIcon, UsersIcon, ChevronRightIcon } from './icons'
 
-export function ClientsView({
-  onViewClient,
-  onNewClient,
-}: {
-  onViewClient: (client: ClientRecord) => void
-  onNewClient: (client: ClientRecord) => void
-}) {
+export function ClientsView() {
+  const router = useRouter()
   const [clients,    setClients]    = useState<ClientRecord[]>([])
   const [flagCounts, setFlagCounts] = useState<Record<string, number>>({})
   const [loading,    setLoading]    = useState(true)
@@ -78,7 +74,7 @@ export function ClientsView({
                 {clients.map((client) => (
                   <tr
                     key={client.id}
-                    onClick={() => onViewClient(client)}
+                    onClick={() => router.push(`/dashboard/clients/${client.id}`)}
                     className="cursor-pointer hover:bg-zinc-50 transition-colors"
                   >
                     <td className="px-6 py-3.5 font-medium text-gray-900">{client.name}</td>
@@ -121,7 +117,7 @@ export function ClientsView({
           onCreated={(client) => {
             setClients((prev) => [client, ...prev])
             setShowCreate(false)
-            onNewClient(client)
+            router.push(`/dashboard/clients/${client.id}`)
           }}
         />
       )}

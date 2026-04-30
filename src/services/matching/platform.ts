@@ -1,35 +1,36 @@
 import type { Transaction } from '@/types/transaction'
-import type { UberWeeklyRow } from '@/services/platformFeed/uber'
+import { AMOUNT_TOLERANCE, DATE_TOLERANCE } from './constants'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface AnnotatedTransaction extends Transaction {
+/** Minimum shape any platform payout row must satisfy to be matchable. */
+export interface PlatformPayoutRow {
+  netEarnings: number
+  payoutDate: string
+  sourceLabel: string
+}
+
+export interface AnnotatedTransaction<R extends PlatformPayoutRow = PlatformPayoutRow> extends Transaction {
   /** Whether this bank transaction was matched to a platform payout. */
   matchSource: 'platform' | 'unmatched'
   /**
    * The platform payout row this transaction was matched to.
    * Only present when matchSource === 'platform'.
    */
-  matchedRow?: UberWeeklyRow
+  matchedRow?: R
 }
 
-export interface UnmatchedPayout {
-  row: UberWeeklyRow
+export interface UnmatchedPayout<R extends PlatformPayoutRow = PlatformPayoutRow> {
+  row: R
   reason: string
 }
 
-export interface PlatformMatchResult {
+export interface PlatformMatchResult<R extends PlatformPayoutRow = PlatformPayoutRow> {
   /** Every bank transaction, annotated with match data. */
-  transactions: AnnotatedTransaction[]
+  transactions: AnnotatedTransaction<R>[]
   /** Platform payouts for which no bank credit was found within tolerance. */
-  unmatchedPayouts: UnmatchedPayout[]
+  unmatchedPayouts: UnmatchedPayout<R>[]
 }
-
-// ─── Tolerances ───────────────────────────────────────────────────────────────
-
-const AMOUNT_TOLERANCE = 2 
-   // ±£2
-const DATE_TOLERANCE   = 3    // ±3 calendar days
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -84,12 +85,12 @@ function daysDiff(a: string, b: string): number {
  * @param transactions Raw bank transactions from the bank feed parser
  * @returns            Annotated transactions + list of unmatched payouts
  */
-export function matchPlatformPayouts(
-  payouts: UberWeeklyRow[],
+export function matchPlatformPayouts<R extends PlatformPayoutRow>(
+  payouts: R[],
   transactions: Transaction[],
-): PlatformMatchResult {
+): PlatformMatchResult<R> {
   // Annotate every transaction as unmatched to start; track by index
-  const annotated: AnnotatedTransaction[] = transactions.map((t) => ({
+  const annotated: AnnotatedTransaction<R>[] = transactions.map((t) => ({
     ...t,
     matchSource: 'unmatched',
   }))
@@ -101,7 +102,7 @@ export function matchPlatformPayouts(
       .filter((i) => annotated[i].amount > 0),
   )
 
-  const unmatchedPayouts: UnmatchedPayout[] = []
+  const unmatchedPayouts: UnmatchedPayout<R>[] = []
 
   for (const payout of payouts) {
     let bestIndex: number | null = null

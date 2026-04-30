@@ -69,9 +69,7 @@ async function openFlagExists(clientId: string, flagType: FlagType, taxYear?: st
     .eq('flag_type', flagType)
     .eq('status', 'open')
 
-  if (taxYear) query.eq('tax_year', taxYear)
-
-  const { data } = await query.maybeSingle()
+  const { data } = await (taxYear ? query.eq('tax_year', taxYear) : query).maybeSingle()
   return !!data
 }
 
@@ -362,9 +360,7 @@ export async function syncTransactionFlags(
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-// TODO: Set to false once client profile UI and vehicle management UI are built.
-// These UIs don't exist yet so the flags fire permanently with no way to clear them.
-const SUPPRESS_SETUP_FLAGS = true
+import { SUPPRESS_SETUP_FLAGS } from '@/config'
 
 /**
  * Run all P-01 to P-33 completeness checks for a client and the given tax year.

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { getTaxSummary, getReturnEvaluation, advanceReturn, getSavedTaxInputs, saveTaxFigures, syncSummaryFlags } from '../actions'
+import { getClients, getTaxSummary, getReturnEvaluation, advanceReturn, getSavedTaxInputs, saveTaxFigures, syncSummaryFlags } from '../actions'
 import type { ClientRecord } from '../actions'
 import type { ReturnEvaluation, ReturnStatus } from '../types'
 import type { TaxSummary } from '@/types/tax'
@@ -16,15 +16,9 @@ import type { StudentLoanPlan } from '@/types/sa100'
 import { CATEGORY_LABELS, CATEGORY_COLORS } from '../constants'
 import { SpinnerIcon, AlertIcon, TaxIcon, CheckIcon, XIcon } from './icons'
 
-export function TaxView({
-  selectedClient,
-  allClients,
-  onSelectClient,
-}: {
-  selectedClient:  ClientRecord | null
-  allClients:      ClientRecord[]
-  onSelectClient:  (c: ClientRecord | null) => void
-}) {
+export function TaxView() {
+  const [allClients,     setAllClients]     = useState<ClientRecord[]>([])
+  const [selectedClient, setSelectedClient] = useState<ClientRecord | null>(null)
   const availableYears = getAvailableTaxYears()
 
   const [taxYear,            setTaxYear]            = useState(DEFAULT_TAX_YEAR)
@@ -44,6 +38,10 @@ export function TaxView({
   const [appliedTaxPaid,       setAppliedTaxPaid]       = useState<number>(0)
   const [studentLoanPlan,      setStudentLoanPlan]      = useState<StudentLoanPlan | undefined>(undefined)
   const [declarationConfirmed, setDeclarationConfirmed] = useState(false)
+
+  useEffect(() => {
+    getClients().then(setAllClients)
+  }, [])
 
   // Effect 1: load saved inputs whenever client/year changes
   useEffect(() => {
@@ -232,7 +230,7 @@ export function TaxView({
             value={selectedClient?.id ?? ''}
             onChange={(e) => {
               const client = allClients.find((c) => c.id === e.target.value) ?? null
-              onSelectClient(client)
+              setSelectedClient(client)
             }}
             className="text-xs border border-gray-200 rounded px-2.5 py-1.5 text-gray-700 bg-white cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-400"
           >

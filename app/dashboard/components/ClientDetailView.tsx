@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import type { TransactionCategory } from '@/types/transaction'
 import { getClientTransactions, getClientFlags, getClientTaxYears, getClientDocuments, runFlagCheck, getReturnEvaluation, advanceReturn } from '../actions'
 import type { ClientRecord, SavedTransaction, ClientFlag, SavedTaxYearSummary, ClientDocument } from '../actions'
@@ -154,13 +155,8 @@ function HistoryDetailModal({
 
 // ─── Client Detail View ───────────────────────────────────────────────────────
 
-export function ClientDetailView({
-  client,
-  onBack,
-}: {
-  client: ClientRecord
-  onBack: () => void
-}) {
+export function ClientDetailView({ client }: { client: ClientRecord }) {
+  const router = useRouter()
   const availableYears = getAvailableTaxYears()
 
   const [selectedYear,      setSelectedYear]      = useState(DEFAULT_TAX_YEAR)
@@ -213,7 +209,7 @@ export function ClientDetailView({
       <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-8 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button
-            onClick={onBack}
+            onClick={() => router.push('/dashboard/clients')}
             className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
           >
             <ChevronLeftIcon className="w-4 h-4" />

@@ -32,8 +32,7 @@ export interface ReceiptMatchResult {
 
 // ─── Tolerances & weights ─────────────────────────────────────────────────────
 
-const AMOUNT_TOLERANCE = 2   // ±£2
-const DATE_TOLERANCE   = 3   // ±3 calendar days
+import { AMOUNT_TOLERANCE, DATE_TOLERANCE } from './constants'
 
 /** Minimum composite score (0–1) for a pairing to be considered valid. */
 const SCORE_THRESHOLD = 0.25

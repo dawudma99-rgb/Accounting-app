@@ -29,9 +29,7 @@ export interface ReturnEvaluation {
   isReadyForSubmission:   boolean
 }
 
-// ─── Testing mode ────────────────────────────────────────────────────────────
-// TODO: Set to false once client profile UI and vehicle management UI are built.
-const SUPPRESS_SETUP_FLAGS = true
+import { SUPPRESS_SETUP_FLAGS } from '@/config'
 
 // ─── Status transition map ────────────────────────────────────────────────────
 

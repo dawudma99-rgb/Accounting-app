@@ -197,7 +197,13 @@ async function categoriseWithClaude(
   const response = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 512,
-    system: buildSystemPrompt(context.businessType),
+    system: [
+      {
+        type: 'text',
+        text: buildSystemPrompt(context.businessType),
+        cache_control: { type: 'ephemeral' },
+      },
+    ],
     messages: [{ role: 'user', content: buildUserMessage(transaction, context.receiptText) }],
   })
 

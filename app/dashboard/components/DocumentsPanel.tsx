@@ -1,8 +1,7 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { supabase } from '@/lib/supabase'
-import { saveDocumentRecord, getClientDocuments, markDocumentReviewed } from '../actions'
+import { getUploadUrl, getDocumentUrl, saveDocumentRecord, markDocumentReviewed } from '../actions'
 import type { ClientDocument } from '../actions'
 import { CheckIcon, SpinnerIcon, XIcon, AlertIcon } from './icons'
 
@@ -56,8 +55,6 @@ const CATEGORY_BADGES: Record<string, string> = {
   income:              'bg-emerald-100 text-emerald-700',
 }
 
-const STORAGE_BUCKET = 'documents'
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fileExtension(name: string): string {
@@ -66,14 +63,6 @@ function fileExtension(name: string): string {
 
 function isExpenseCategory(cat: string): boolean {
   return (EXPENSE_CATEGORIES as readonly string[]).includes(cat)
-}
-
-async function ensureBucket(): Promise<void> {
-  const { error } = await supabase.storage.createBucket(STORAGE_BUCKET, { public: true })
-  // ignore if bucket already exists
-  if (error && !error.message.includes('already exists')) {
-    console.warn('[documents] bucket creation:', error.message)
-  }
 }
 
 // ─── Upload Modal ─────────────────────────────────────────────────────────────
@@ -89,12 +78,12 @@ function UploadModal({
   onClose:    () => void
   onUploaded: (doc: ClientDocument) => void
 }) {
-  const fileRef                         = useRef<HTMLInputElement>(null)
-  const [category,   setCategory]       = useState<string>('fuel')
-  const [file,       setFile]           = useState<File | null>(null)
-  const [amount,     setAmount]         = useState('')
-  const [uploading,  setUploading]      = useState(false)
-  const [error,      setError]          = useState<string | null>(null)
+  const fileRef                        = useRef<HTMLInputElement>(null)
+  const [category,  setCategory]       = useState<string>('fuel')
+  const [file,      setFile]           = useState<File | null>(null)
+  const [amount,    setAmount]         = useState('')
+  const [uploading, setUploading]      = useState(false)
+  const [error,     setError]          = useState<string | null>(null)
 
   const showAmount = isExpenseCategory(category)
 
@@ -104,29 +93,21 @@ function UploadModal({
     setError(null)
 
     try {
-      await ensureBucket()
+      // 1. Get a short-lived signed upload URL from the server
+      const { signedUrl, path } = await getUploadUrl(clientId, taxYear, file.name)
 
-      const ext  = fileExtension(file.name)
-      const path = `${clientId}/${taxYear}/${Date.now()}-${file.name}`
+      // 2. PUT the file directly to Supabase storage via the signed URL
+      const res = await fetch(signedUrl, {
+        method:  'PUT',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body:    file,
+      })
+      if (!res.ok) throw new Error(`Storage upload failed (${res.status})`)
 
-      const { error: uploadError } = await supabase.storage
-        .from(STORAGE_BUCKET)
-        .upload(path, file, { upsert: false })
-
-      if (uploadError) throw new Error(uploadError.message)
-
-      const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path)
-
+      // 3. Save the record — path is stored, not a public URL
       const expenseAmount = showAmount && amount ? parseFloat(amount) : undefined
-
       const doc = await saveDocumentRecord(
-        clientId,
-        taxYear,
-        category,
-        urlData.publicUrl,
-        file.name,
-        ext,
-        expenseAmount,
+        clientId, taxYear, category, path, file.name, fileExtension(file.name), expenseAmount,
       )
 
       onUploaded(doc)
@@ -259,13 +240,24 @@ export function DocumentsPanel({
   taxYear,
   initialDocuments,
 }: {
-  clientId:          string
-  taxYear:           string
-  initialDocuments:  ClientDocument[]
+  clientId:         string
+  taxYear:          string
+  initialDocuments: ClientDocument[]
 }) {
-  const [documents,    setDocuments]    = useState<ClientDocument[]>(initialDocuments)
-  const [showUpload,   setShowUpload]   = useState(false)
-  const [reviewing,    setReviewing]    = useState<string | null>(null)
+  const [documents,  setDocuments]  = useState<ClientDocument[]>(initialDocuments)
+  const [showUpload, setShowUpload] = useState(false)
+  const [reviewing,  setReviewing]  = useState<string | null>(null)
+  const [opening,    setOpening]    = useState<string | null>(null)
+
+  async function handleOpen(doc: ClientDocument) {
+    setOpening(doc.id)
+    try {
+      const url = await getDocumentUrl(doc.file_url)
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } finally {
+      setOpening(null)
+    }
+  }
 
   async function handleMarkReviewed(doc: ClientDocument) {
     setReviewing(doc.id)
@@ -277,10 +269,6 @@ export function DocumentsPanel({
     } finally {
       setReviewing(null)
     }
-  }
-
-  function handleUploaded(doc: ClientDocument) {
-    setDocuments((prev) => [doc, ...prev])
   }
 
   return (
@@ -331,14 +319,14 @@ export function DocumentsPanel({
                       </span>
                     </td>
                     <td className="px-4 py-3.5">
-                      <a
-                        href={doc.file_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm text-slate-700 hover:text-slate-900 hover:underline truncate max-w-[200px] block"
+                      <button
+                        onClick={() => handleOpen(doc)}
+                        disabled={opening === doc.id}
+                        className="flex items-center gap-1 text-sm text-slate-700 hover:text-slate-900 hover:underline truncate max-w-[200px] disabled:opacity-50 cursor-pointer"
                       >
+                        {opening === doc.id && <SpinnerIcon className="w-3 h-3 animate-spin flex-none" />}
                         {doc.file_name}
-                      </a>
+                      </button>
                     </td>
                     <td className="px-4 py-3.5 text-right font-mono text-sm text-gray-700">
                       {doc.expense_amount != null ? `£${Number(doc.expense_amount).toFixed(2)}` : '—'}
@@ -390,7 +378,7 @@ export function DocumentsPanel({
           clientId={clientId}
           taxYear={taxYear}
           onClose={() => setShowUpload(false)}
-          onUploaded={handleUploaded}
+          onUploaded={(doc) => setDocuments((prev) => [doc, ...prev])}
         />
       )}
     </>

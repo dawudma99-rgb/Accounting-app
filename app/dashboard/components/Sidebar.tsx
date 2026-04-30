@@ -1,36 +1,32 @@
 'use client'
 
-import type { View } from '../types'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import {
   GridIcon, UsersIcon, TaxIcon, ListIcon,
   ReceiptIcon, SettingsIcon,
 } from './icons'
 
-export function Sidebar({
-  currentView,
-  onNavigate,
-}: {
-  currentView: View
-  onNavigate: (view: View) => void
-}) {
-  const navItems: Array<{
-    label: string
-    icon: (p: { className?: string }) => React.ReactElement
-    view: View | null
-  }> = [
-    { label: 'Dashboard',    icon: GridIcon,     view: 'dashboard' },
-    { label: 'Clients',      icon: UsersIcon,    view: 'clients'   },
-    { label: 'Tax Summary',  icon: TaxIcon,      view: 'tax'       },
-    { label: 'Transactions', icon: ListIcon,     view: null        },
-    { label: 'Receipts',     icon: ReceiptIcon,  view: null        },
-    { label: 'Settings',     icon: SettingsIcon, view: null        },
-  ]
+const navItems: Array<{
+  label: string
+  icon: (p: { className?: string }) => React.ReactElement
+  href: string | null
+}> = [
+  { label: 'Dashboard',    icon: GridIcon,     href: '/dashboard'         },
+  { label: 'Clients',      icon: UsersIcon,    href: '/dashboard/clients' },
+  { label: 'Tax Summary',  icon: TaxIcon,      href: '/dashboard/tax'     },
+  { label: 'Transactions', icon: ListIcon,     href: null                 },
+  { label: 'Receipts',     icon: ReceiptIcon,  href: null                 },
+  { label: 'Settings',     icon: SettingsIcon, href: null                 },
+]
 
-  // Clients nav item stays highlighted when viewing a client's detail
-  function isActive(view: View | null): boolean {
-    if (view === null) return false
-    if (view === 'clients') return currentView === 'clients' || currentView === 'client-detail'
-    return currentView === view
+export function Sidebar() {
+  const pathname = usePathname()
+
+  function isActive(href: string | null): boolean {
+    if (!href) return false
+    if (href === '/dashboard') return pathname === '/dashboard'
+    return pathname.startsWith(href)
   }
 
   return (
@@ -51,23 +47,27 @@ export function Sidebar({
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-0.5">
-        {navItems.map(({ label, icon: Icon, view }) => (
-          <button
-            key={label}
-            onClick={() => view && onNavigate(view)}
-            disabled={!view}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded text-sm font-medium transition-colors ${
-              isActive(view)
-                ? 'bg-slate-700 text-white cursor-pointer'
-                : view
-                ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 cursor-pointer'
-                : 'text-slate-600 cursor-not-allowed opacity-40'
-            }`}
-          >
-            <Icon className="w-4.5 h-4.5 flex-none" />
-            {label}
-          </button>
-        ))}
+        {navItems.map(({ label, icon: Icon, href }) => {
+          const active = isActive(href)
+          const className = `w-full flex items-center gap-3 px-3 py-2.5 rounded text-sm font-medium transition-colors ${
+            active
+              ? 'bg-slate-700 text-white cursor-pointer'
+              : href
+              ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 cursor-pointer'
+              : 'text-slate-600 cursor-not-allowed opacity-40'
+          }`
+          return href ? (
+            <Link key={label} href={href} className={className}>
+              <Icon className="w-4.5 h-4.5 flex-none" />
+              {label}
+            </Link>
+          ) : (
+            <span key={label} className={className}>
+              <Icon className="w-4.5 h-4.5 flex-none" />
+              {label}
+            </span>
+          )
+        })}
       </nav>
 
       <div className="px-3 pb-4">
