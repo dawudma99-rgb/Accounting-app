@@ -5,7 +5,8 @@
       "Bash(npx tsc *)",
       "Bash(xargs grep *)",
       "Bash(npx supabase *)",
-      "PowerShell($env:NODE_OPTIONS = \"--max-old-space-size=4096\"; npx tsc --noEmit 2>&1 | Select-Object -First 80)"
+      "PowerShell($env:NODE_OPTIONS = \"--max-old-space-size=4096\"; npx tsc --noEmit 2>&1 | Select-Object -First 80)",
+      "Bash(grep -E \"\\\\.\\(ts|tsx|js|jsx\\)$\")"
     ]
   }
 }
