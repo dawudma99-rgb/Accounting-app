@@ -18,7 +18,7 @@ Internal workflow tooling for transaction categorisation and client management.
 
 A purpose-built internal system for a UK accountancy practice. It connects to client bank accounts via open banking, processes incoming transactions through a two-tier categorisation engine, and surfaces exceptions for accountant review.
 
-The objective is to shift the accountant's role from full manual categorisation to exception handling — reviewing only what the system cannot confidently classify. Currently being trialled against a live client portfolio.
+The objective is to shift the accountant's role from full manual categorisation to exception handling — reviewing only what the system cannot confidently classify. It is not designed as client-facing software; it is built for the accountant's internal workflow. Currently being trialled against a live client portfolio.
 
 ---
 
@@ -42,11 +42,11 @@ The engine operates in two tiers, ordered by cost and confidence.
 
 Every transaction is matched against a `category_rules` table in Supabase, keyed by payee patterns, amounts, and account context. Matches at or above 80% confidence are applied automatically.
 
-No AI call is made. Latency is sub-millisecond. Cost is zero.
+No AI call is made. Latency is low. Cost is zero.
 
 **Tier 2 — Claude Fallback**
 
-Transactions that fail to match, or fall below the confidence threshold, are sent to Claude claude-opus-4-6. The model returns a category, a confidence score, and a rationale. All three are stored alongside the result.
+Transactions that fail to match, or fall below the confidence threshold, are sent to Claude Opus 4.6. The model returns a category, a confidence score, and a rationale. All three are stored alongside the result.
 
 **Feedback Loop**
 
@@ -111,7 +111,7 @@ Currently being measured against a live client portfolio. The following metrics 
 |---|---|
 | Transactions auto-categorised without review | ≥85% |
 | Transactions escalated to review queue | ≤15% |
-| Classification accuracy after accountant approval | ≥95% |
+| Target classification accuracy after accountant approval | ≥95% |
 | Time saved per client per month | Baseline in progress |
 | Claude API cost per batch | Tracked per run; expected to fall as cache hit rate improves |
 
@@ -127,7 +127,7 @@ Accuracy is measured by override rate — how frequently an accountant changes a
 | Language | TypeScript (strict) |
 | Styling | Tailwind CSS v4 |
 | Database | Supabase — PostgreSQL, Row Level Security, Auth |
-| AI | Claude claude-opus-4-6 — categorisation and document OCR via Vision |
+| AI | Claude Opus 4.6 — categorisation and document OCR via Vision |
 | Open Banking | TrueLayer |
 | Deployment | Vercel |
 
