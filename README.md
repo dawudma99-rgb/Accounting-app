@@ -2,122 +2,142 @@
 
 # Accountancy Practice Automation
 
-A production AI system for automated transaction categorisation, built on a retrieval-augmented architecture with two collaborating sources of truth.
+A production AI system for automated transaction categorisation, built on a retrieval-augmented architecture with semantic embeddings and two collaborating sources of truth.
 
 [![Next.js](https://img.shields.io/badge/Next.js_16-black?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_v4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
 [![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=flat-square&logo=supabase&logoColor=white)](https://supabase.com)
 [![Claude](https://img.shields.io/badge/Claude_AI-D97706?style=flat-square&logo=anthropic&logoColor=white)](https://anthropic.com)
+[![Voyage AI](https://img.shields.io/badge/Voyage_AI-6366F1?style=flat-square&logoColor=white)](https://www.voyageai.com)
 
 </div>
 
 ---
 
-## What This Is
+## RAG Architecture
 
-An internal automation system built for a UK accountancy practice. It ingests bank transaction data, classifies each transaction against HMRC expense categories, and routes the results to either automatic approval or an accountant review queue — depending on how confident the system is.
+This system is built on a Retrieval-Augmented Generation pipeline. Before Claude is ever called, the system retrieves semantically similar past classifications from a vector store. Generation is the last resort — not the first.
 
-The goal is to move the accountant away from categorising every transaction and toward reviewing only the cases the system cannot confidently resolve. Currently running against a live client portfolio.
+The retrieval layer uses **Voyage AI** embeddings. Every transaction description is embedded using Voyage's finance-tuned model and stored in a **pgvector** index in Supabase. When a new transaction arrives, its embedding is compared against the index via cosine similarity. If a sufficiently similar past transaction exists — one that was previously classified and approved by an accountant — that classification is reused directly.
 
----
+This is what makes the system genuinely retrieval-augmented rather than AI-wrapped:
 
-## The Core Architecture: Two Sources of Truth
-
-Most AI-assisted tools treat the AI as the only authority. This system is built differently. Classification authority is split between two sources that operate in strict priority order:
-
-**Source 1 — The Rules Cache (Supabase)**
-
-A structured table of regex patterns, keyed by `(pattern, business_type)`, each carrying a confidence score, optional amount bounds, and an HMRC category. Every incoming transaction is tested against this table first.
-
-This is deterministic, instant, and costs nothing to query.
-
-**Source 2 — Claude Sonnet 4.6**
-
-When the rules cache produces no match above the confidence threshold, the transaction is passed to Claude. Claude returns a structured JSON response: a category, a confidence score, a plain-English rationale, and — critically — a regex pattern and amount bounds that could describe this transaction in the future.
-
-This is the generative fallback. It handles what the cache has not seen before.
-
-**The bridge between them**
-
-Every classification that an accountant approves — whether it came from Claude or was manually assigned — is upserted back into the rules cache at high confidence. The cache grows through use. Over time, the proportion of transactions that require a Claude call decreases, and the cost per batch falls accordingly.
-
-Neither source alone is sufficient. The cache cannot handle what it has not been taught. Claude has no memory of prior decisions. Together, they form a system that is fast where it can be and intelligent where it must be.
+- The retrieval index is built from **accountant-validated decisions**, not training data
+- Semantic similarity catches variations that exact pattern matching misses — `AMAZON MKTPL*` and `AMZ*EU` are retrieved as the same merchant
+- Every Claude-generated classification is embedded and added to the index, so future similar transactions never need a model call
+- The index improves continuously through use, without retraining or human labelling effort
 
 ```
 Incoming transaction
         │
         ▼
-┌───────────────────────┐
-│  Rules Cache (Source 1)│  ◄── deterministic, zero-cost
-│  Supabase regex match  │
-└───────────┬───────────┘
-            │
-     Match ≥80%?
-            │
-    ┌───────┴───────┐
-   Yes              No
-    │               │
-    ▼               ▼
-Auto-apply    ┌─────────────────────┐
-              │  Claude Sonnet 4.6  │  ◄── generative fallback
-              │  (Source 2)         │
-              └────────┬────────────┘
-                       │
-              Returns: category
-                       + confidence
-                       + rationale
-                       + regex pattern  ──► upserted to cache
-                       │
-               Confidence ≥80%?
-                       │
-              ┌────────┴────────┐
-             Yes               No
-              │                 │
-           Auto-apply    Review queue
+  Voyage AI embed
+  (finance-tuned model)
+        │
+        ▼
+┌──────────────────────────────┐
+│  pgvector similarity search  │  ◄── semantic retrieval layer
+│  Supabase vector index        │      cosine similarity against
+│  (accountant-validated)       │      all prior approved decisions
+└─────────────┬────────────────┘
+              │
+      Similarity ≥ threshold?
+              │
+      ┌───────┴────────┐
+     Yes               No
+      │                 │
+      ▼                 ▼
+ Apply cached     ┌──────────────────────────┐
+ classification   │  Rules Cache (Source 2)   │  ◄── deterministic fallback
+                  │  Supabase regex patterns  │      exact match, zero cost
+                  └────────────┬─────────────┘
                                │
-                               ▼
-                      Accountant reviews
+                       Match ≥80%?
                                │
-                               ▼
-                    Upserted to rules cache
-                    (cache learns from human)
+                       ┌───────┴───────┐
+                      Yes              No
+                       │               │
+                       ▼               ▼
+                   Auto-apply    ┌─────────────────────┐
+                                 │  Claude Sonnet 4.6   │  ◄── generative fallback
+                                 │  (Source 3)          │      only called when
+                                 └────────┬─────────────┘      retrieval fails
+                                          │
+                                 Returns: category
+                                          + confidence
+                                          + rationale
+                                          + regex pattern
+                                          │
+                                 ┌────────┴────────────────┐
+                                 │  Embed + store to index  │  ◄── index grows
+                                 │  Upsert to rules cache   │      with each call
+                                 └─────────────────────────┘
+                                          │
+                                 Confidence ≥80%?
+                                          │
+                                 ┌────────┴────────┐
+                                Yes               No
+                                 │                 │
+                              Auto-apply    Review queue
+                                                   │
+                                                   ▼
+                                          Accountant reviews
+                                                   │
+                                          ┌────────┴───────────────┐
+                                          │  Embed + store to index │
+                                          │  Upsert to rules cache  │
+                                          └─────────────────────────┘
 ```
 
 ---
 
-## Why This Is a RAG Architecture
+## Two Sources of Truth
 
-Retrieval-Augmented Generation describes a pattern where a retrieval step runs before generation — reducing hallucination, grounding output in known facts, and lowering inference cost.
+Classification authority is split between two persistent knowledge stores. Neither is sufficient alone.
 
-This system applies that pattern to classification:
+**Source 1 — The Vector Index (Voyage AI + pgvector)**
 
-- **Retrieval** — The rules cache is queried first. If a matching rule exists, its answer is used directly. No generation occurs.
-- **Augmentation** — When retrieval fails, Claude's prompt is augmented with business-type context (HMRC categories, trade type, account metadata) so that generation is grounded in domain knowledge rather than general priors.
-- **Generation** — Claude produces a structured classification plus a pattern that can be retrieved next time.
-- **Index update** — The generated output is stored back into the retrieval index. The retrieval layer becomes more capable with every accountant-confirmed decision.
+Every accountant-approved classification is embedded with Voyage AI and stored as a vector in Supabase. When a new transaction arrives, semantic similarity search retrieves the most relevant past decisions. This handles linguistic variation, merchant name truncation, and cross-client generalisation — things regex cannot.
 
-The feedback loop is what distinguishes this from a naive AI integration. The system does not repeat the same AI calls; it learns from them.
+**Source 2 — The Rules Cache (Supabase)**
+
+A structured table of regex patterns keyed by `(pattern, business_type)`, each carrying a confidence score, optional amount bounds, and an HMRC category. This is the deterministic fallback when vector similarity is insufficient. Instant, cost-free, fully auditable.
+
+**How they stay in sync**
+
+Every accountant decision — whether it confirms a Claude suggestion or overrides one — is written to both stores simultaneously: embedded into the vector index and upserted as a regex rule into the rules cache. The two sources of truth are always consistent. They grow together, and the system's accuracy improves without any manual curation.
+
+---
+
+## Why Voyage AI
+
+Generic embedding models are trained on web text. Transaction data is short, abbreviated, and domain-specific — `HMRC CUMBERNAULD`, `TSGN TICKETING`, `SQ *COFFEE WORKS` are not well-represented in general corpora.
+
+Voyage AI's finance-tuned embedding model (`voyage-finance-2`) is trained on financial documents and transaction data. Embeddings for merchant names, payment references, and financial descriptions are meaningfully clustered — similar merchants land near each other in the embedding space even when their string representations differ significantly.
+
+This is the difference between a similarity search that works on real transaction data and one that does not.
 
 ---
 
 ## Human-in-the-Loop Design
 
-The accountant is the final authority. This is not a constraint worked around — it is a design requirement.
+The accountant is the final authority. This is not a constraint worked around — it is the mechanism by which the system improves.
 
-- Every classification records its source (`cache` or `claude`), its confidence score, and a plain-English rationale
-- Low-confidence results are held in a review queue; nothing ambiguous is applied silently
-- Accountant overrides are the primary quality signal — they feed directly back into the rules cache
-- Every transaction has a complete, auditable decision path
+- Every classification records its source (`vector`, `cache`, or `claude`), confidence score, and rationale
+- Low-confidence results are held in a review queue — nothing ambiguous is applied silently
+- Accountant approvals and overrides are the write path for both knowledge stores
+- Every transaction has a complete, auditable decision path from input to approved category
 
-In a compliance context, silent automation is a liability. Every decision must be traceable to either a deterministic rule or a human-approved AI suggestion.
+In a compliance context, silent automation is a liability. The system is built so that every decision is either deterministically retrieved from a prior human-approved classification or explicitly reviewed before it takes effect.
 
 ---
 
 ## Features
 
 **Transaction categorisation**
-- Two-tier engine: rules cache first, Claude fallback second
+- Three-tier RAG pipeline: vector retrieval → rules cache → Claude generation
+- Voyage AI semantic embeddings for cross-client pattern generalisation
 - HMRC category mapping tuned per business type (`mechanic`, `plumber`, `taxi`)
 - Confidence scoring and source attribution on every result
 - Review queue for anything below the confidence threshold
@@ -146,8 +166,9 @@ In a compliance context, silent automation is a liability. Every decision must b
 | Framework | Next.js 16.2 — App Router, Server Actions, Route Handlers |
 | Language | TypeScript (strict) |
 | Styling | Tailwind CSS v4 |
-| Database | Supabase — PostgreSQL, Row Level Security, Auth |
-| AI | Claude Sonnet 4.6 — categorisation, receipt OCR via Vision |
+| Database | Supabase — PostgreSQL + pgvector, Row Level Security, Auth |
+| Embeddings | Voyage AI — `voyage-finance-2`, finance-domain tuned |
+| AI | Claude Sonnet 4.6 — categorisation fallback, receipt OCR via Vision |
 | Open Banking | TrueLayer |
 | Deployment | Vercel |
 
@@ -163,7 +184,8 @@ app/                          # Next.js App Router — routes and UI
 src/
   services/
     categorisation/
-      engine.ts               # Two-tier RAG categorisation engine
+      engine.ts               # Three-tier RAG categorisation engine
+      embeddings.ts           # Voyage AI embed + pgvector search
     bankFeed/                 # Monzo CSV parsing
     platformFeed/             # Uber payout statement parsing
     matching/                 # Receipt-to-transaction reconciliation
@@ -180,6 +202,7 @@ src/
 
   lib/
     claude/                   # Anthropic SDK client
+    voyage/                   # Voyage AI client
     supabase/                 # DB client (RLS-aware, server-safe)
     truelayer/                # Open banking client
     vision/                   # Google Vision client
@@ -196,15 +219,16 @@ src/
 | Transactions auto-categorised without review | ≥85% |
 | Transactions escalated to review queue | ≤15% |
 | Classification accuracy after accountant approval | ≥95% |
-| Claude API cost per batch | Decreasing — tracked per run |
+| Claude API calls per batch | Decreasing — falls as vector index grows |
+| Voyage AI embedding cost per transaction | Sub-cent at scale |
 
-Accuracy is measured by override rate: how frequently the accountant changes a system suggestion. Confidence distributions are logged per batch to surface systematic errors early.
+Accuracy is measured by override rate: how frequently the accountant changes a system suggestion. Vector index hit rate and Claude call frequency are logged per batch to track system maturity over time.
 
 ---
 
 ## Setup
 
-**Prerequisites:** Node.js 18+, Supabase project, TrueLayer credentials, Anthropic API key.
+**Prerequisites:** Node.js 18+, Supabase project with pgvector enabled, Voyage AI API key, Anthropic API key, TrueLayer credentials.
 
 ```bash
 npm install
@@ -218,6 +242,7 @@ npm run dev
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key (server-side only) |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
+| `VOYAGE_API_KEY` | Voyage AI API key |
 | `TRUELAYER_CLIENT_ID` | TrueLayer client ID |
 | `TRUELAYER_CLIENT_SECRET` | TrueLayer client secret |
 
